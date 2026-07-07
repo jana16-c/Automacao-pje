@@ -1,0 +1,15 @@
+output/
+references/
+*.xlsx
+*.xlsm
+*.pjc
+*.zip
+*.pdf
+*.sqlite3
+*.log
+__pycache__/
+.pytest_cache/
+.venv/
+dist/
+build/
+.mypy_cache/

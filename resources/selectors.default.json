@@ -1,0 +1,158 @@
+{
+  "version": "0.1.0",
+  "base_url": "http://localhost:9257/pjecalc",
+  "selectors": {
+    "home.importar_calculo": [
+      {
+        "by": "link_text",
+        "value": "Importar CÃ¡lculo"
+      },
+      {
+        "by": "xpath",
+        "value": "//a[contains(normalize-space(.),'Importar CÃ¡lculo')]"
+      }
+    ],
+    "import.file_input": [
+      {
+        "by": "id",
+        "value": "formulario:arquivo:file"
+      },
+      {
+        "by": "css",
+        "value": "input[type='file']"
+      }
+    ],
+    "import.confirmar": [
+      {
+        "by": "id",
+        "value": "formulario:confirmarImportacao"
+      }
+    ],
+    "common.success_message": [
+      {
+        "by": "xpath",
+        "value": "//*[contains(normalize-space(.),'OperaÃ§Ã£o realizada com sucesso')]"
+      }
+    ],
+    "calculo.nome_reclamante": [
+      {
+        "by": "id",
+        "value": "formulario:reclamanteNome"
+      }
+    ],
+    "calculo.cpf": [
+      {
+        "by": "id",
+        "value": "formulario:reclamanteNumeroDocumentoFiscal"
+      }
+    ],
+    "calculo.tab_parametros": [
+      {
+        "by": "id",
+        "value": "formulario:tabParametrosCalculo_lbl"
+      },
+      {
+        "by": "id",
+        "value": "formulario:tabParametrosCalculo_cell"
+      }
+    ],
+    "calculo.data_final": [
+      {
+        "by": "id",
+        "value": "formulario:dataTerminoCalculoInputDate"
+      }
+    ],
+    "calculo.salvar": [
+      {
+        "by": "id",
+        "value": "formulario:salvar"
+      }
+    ],
+    "menu.verbas": [
+      {
+        "by": "id",
+        "value": "formulario:j_id38:0:j_id41:10:j_id46"
+      }
+    ],
+    "verbas.regerar": [],
+    "menu.fgts": [
+      {
+        "by": "id",
+        "value": "formulario:j_id38:0:j_id41:14:j_id46"
+      }
+    ],
+    "fgts.salvar": [
+      {
+        "by": "id",
+        "value": "formulario:salvar"
+      }
+    ],
+    "fgts.regerar": [],
+    "fgts.confirmar": [],
+    "menu.contribuicao_social": [
+      {
+        "by": "id",
+        "value": "formulario:j_id38:0:j_id41:15:j_id46"
+      }
+    ],
+    "contribuicao.salvar": [
+      {
+        "by": "id",
+        "value": "formulario:salvar"
+      }
+    ],
+    "contribuicao.regerar": [],
+    "contribuicao.confirmar": [],
+    "menu.historico_salarial": [
+      {
+        "by": "id",
+        "value": "formulario:j_id38:0:j_id41:9:j_id46"
+      }
+    ],
+    "historico.editar": [
+      {
+        "by": "id",
+        "value": "formulario:listagem:0:alterarHistorico"
+      }
+    ],
+    "historico.competencia": [],
+    "historico.valor_input": [],
+    "historico.salvar": [],
+    "menu.liquidar": [
+      {
+        "by": "id",
+        "value": "formulario:j_id38:2:j_id41:0:j_id46"
+      }
+    ],
+    "liquidar.executar": [
+      {
+        "by": "id",
+        "value": "formulario:liquidar"
+      }
+    ],
+    "menu.imprimir": [
+      {
+        "by": "id",
+        "value": "formulario:j_id38:2:j_id41:1:j_id46"
+      }
+    ],
+    "imprimir.executar": [
+      {
+        "by": "id",
+        "value": "formulario:imprimirConsolidado"
+      }
+    ],
+    "menu.exportar": [
+      {
+        "by": "id",
+        "value": "formulario:j_id38:2:j_id41:4:j_id46"
+      }
+    ],
+    "exportar.executar": [
+      {
+        "by": "id",
+        "value": "formulario:exportar"
+      }
+    ]
+  }
+}

@@ -1,0 +1,40 @@
+Metadata-Version: 2.4
+Name: pje-calc-automation
+Version: 0.1.0
+Summary: Automacao local do PJe-Calc com Python e Selenium.
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: openpyxl<4,>=3.1
+Requires-Dist: selenium<5,>=4.24
+Requires-Dist: requests<3,>=2.32
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8.2; extra == "dev"
+
+# PJe Calc Automation
+
+Projeto Python para automatizar o PJe-Calc local com foco em execucao offline, validacao de entradas, inspeção de DOM e MVP de um registro.
+
+## Desenvolvimento
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e .[dev]
+pytest
+python -m pje_automation --probe
+python -m pje_automation --gui
+```
+
+## Entradas
+
+- modelo `.pjc` ou `.zip` contendo exatamente um `.pjc`
+- planilha `.xlsx` ou `.xlsm`
+- pasta de saida
+
+## Saidas
+
+- `output/PDF`
+- `output/PJC`
+- `output/logs`
+- `output/evidencias`
+- `output/controle`

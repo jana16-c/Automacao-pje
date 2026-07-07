@@ -1,0 +1,2 @@
+[console_scripts]
+pje-automation = pje_automation.__main__:main
