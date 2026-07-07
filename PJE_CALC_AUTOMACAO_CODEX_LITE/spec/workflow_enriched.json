@@ -1,0 +1,194 @@
+{
+  "spec_version": "1.0.0",
+  "project": {
+    "name": "Automação Local do PJe-Calc",
+    "runtime": "offline",
+    "distribution": "Windows EXE único gerado com PyInstaller",
+    "commercial_product": false,
+    "uses_paid_api": false,
+    "uses_ai_at_runtime": false,
+    "primary_goal": "reduzir cliques, preenchimentos e exportações repetitivas"
+  },
+  "launch_inputs": [
+    {
+      "id": "model_file",
+      "label": "Modelo do PJe-Calc",
+      "required": true,
+      "extensions": [
+        ".pjc",
+        ".zip"
+      ],
+      "behavior": "Se ZIP, extrair exatamente um .pjc para diretório temporário."
+    },
+    {
+      "id": "excel_file",
+      "label": "Planilha com dados brutos",
+      "required": true,
+      "extensions": [
+        ".xlsx",
+        ".xlsm"
+      ],
+      "behavior": "Abrir somente para leitura; nunca alterar o original."
+    },
+    {
+      "id": "output_directory",
+      "label": "Pasta de saída",
+      "required": true,
+      "behavior": "Criar PDF, ZIP/PJC, logs, evidências e banco de retomada."
+    }
+  ],
+  "recommended_stack": {
+    "language": "Python 3.12+",
+    "gui": "tkinter/ttk",
+    "browser_automation": "Selenium + Firefox + geckodriver empacotado",
+    "excel": "openpyxl",
+    "state": "sqlite3",
+    "configuration": "JSON",
+    "packaging": "PyInstaller --onefile",
+    "fallback_windows_ui": "pywinauto somente quando DOM/download automático não resolver"
+  },
+  "states": [
+    "PENDENTE",
+    "VALIDANDO_DADOS",
+    "IMPORTANDO_MODELO",
+    "PREENCHENDO_IDENTIFICACAO",
+    "SALVANDO_PARAMETROS",
+    "REGERANDO_VERBAS",
+    "REGERANDO_FGTS",
+    "REGERANDO_CONTRIBUICAO_SOCIAL",
+    "PREENCHENDO_HISTORICO",
+    "LIQUIDANDO",
+    "GERANDO_PDF",
+    "EXPORTANDO_ZIP",
+    "VALIDANDO_SAIDAS",
+    "CONCLUIDO",
+    "ERRO"
+  ],
+  "record_schema": {
+    "record_id": "string única; preferir matrícula/CPF normalizado; fallback índice da origem",
+    "nome": "string obrigatória",
+    "cpf": "11 dígitos; armazenar normalizado e mascarar nos logs",
+    "data_admissao": "dd/mm/aaaa ou null",
+    "data_demissao": "dd/mm/aaaa ou null",
+    "processo": "string opcional",
+    "historicos": [
+      {
+        "nome": "DIFERENÇA DE ADI NOT + REFLEXO",
+        "valores": [
+          {
+            "competencia": "MM/AAAA",
+            "valor": "Decimal"
+          }
+        ]
+      }
+    ]
+  },
+  "output_contract": {
+    "pdf": "PDF/<nome_seguro>.pdf",
+    "zip": "PJC/<nome_seguro>.zip",
+    "zip_must_contain": ".pjc",
+    "logs": "logs/execucao.log",
+    "database": "controle/execucao.sqlite3",
+    "evidence": "evidencias/<record_id>/<etapa>_<timestamp>.png"
+  },
+  "global_rules": [
+    "Nunca modificar o Excel original.",
+    "Nunca considerar concluído somente porque um clique foi executado.",
+    "Toda etapa deve ter condição observável de sucesso.",
+    "Não usar coordenadas fixas como estratégia principal.",
+    "Não usar time.sleep como único mecanismo de sincronização.",
+    "Não registrar CPF completo em logs comuns.",
+    "Não sobrescrever saída válida sem política explícita.",
+    "Permitir retomada após falha ou fechamento do programa."
+  ],
+  "high_level_workflow": [
+    {
+      "id": "preflight",
+      "state": "VALIDANDO_DADOS",
+      "actions": [
+        "validar modelo, Excel e pasta",
+        "detectar cabeçalhos/abas",
+        "montar registros normalizados",
+        "validar duplicidade e competências",
+        "verificar http://localhost:9257/pjecalc"
+      ],
+      "success": "zero erros bloqueantes e ao menos um registro válido"
+    },
+    {
+      "id": "import_model",
+      "state": "IMPORTANDO_MODELO",
+      "actions": [
+        "enviar caminho ao input type=file",
+        "confirmar importação"
+      ],
+      "success": "mensagem de operação realizada com sucesso e tela de dados carregada"
+    },
+    {
+      "id": "fill_identity",
+      "state": "PREENCHENDO_IDENTIFICACAO",
+      "actions": [
+        "preencher nome",
+        "preencher CPF",
+        "preencher data final quando aplicável"
+      ],
+      "success": "valores lidos do DOM coincidem com o registro"
+    },
+    {
+      "id": "regenerate",
+      "states": [
+        "REGERANDO_VERBAS",
+        "REGERANDO_FGTS",
+        "REGERANDO_CONTRIBUICAO_SOCIAL"
+      ],
+      "actions": [
+        "regerar",
+        "confirmar intervalos",
+        "aguardar sucesso"
+      ],
+      "success": "mensagem de sucesso em cada módulo"
+    },
+    {
+      "id": "fill_history",
+      "state": "PREENCHENDO_HISTORICO",
+      "actions": [
+        "abrir edição",
+        "localizar competência inicial",
+        "preencher sequência via DOM"
+      ],
+      "success": "contagem e primeiro/último valores conferidos"
+    },
+    {
+      "id": "liquidate_and_export",
+      "states": [
+        "LIQUIDANDO",
+        "GERANDO_PDF",
+        "EXPORTANDO_ZIP",
+        "VALIDANDO_SAIDAS"
+      ],
+      "actions": [
+        "liquidar",
+        "gerar PDF",
+        "exportar ZIP",
+        "renomear",
+        "validar"
+      ],
+      "success": "PDF válido e ZIP válido contendo .pjc"
+    }
+  ],
+  "extension_reference": {
+    "name": "Copiar e Colar no Pje-Calc 2.0",
+    "version": "2.2.3",
+    "format": "Firefox XPI / Manifest V3",
+    "shortcuts": {
+      "vertical": "Ctrl+Alt+V",
+      "horizontal": "Ctrl+Alt+H"
+    },
+    "routes": [
+      "/pjecalc/pages/calculo/historico-salarial.jsf",
+      "/pjecalc/pages/calculo/parametrizar-ocorrencia.jsf",
+      "/pjecalc/pages/calculo/parametrizar-fgts.jsf",
+      "/pjecalc/pages/calculo/inss/parametrizar-inss.jsf"
+    ],
+    "recommended_use": "Referência técnica. Reimplementar o mecanismo no EXE com callback e validação, evitando dependência externa."
+  }
+}

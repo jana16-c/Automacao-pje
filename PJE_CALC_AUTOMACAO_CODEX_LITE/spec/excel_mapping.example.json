@@ -1,0 +1,34 @@
+{
+  "version": "0.1.0",
+  "source_workbook": "selecionado pelo usuário",
+  "do_not_modify_source": true,
+  "normalization": {
+    "names": "trim, collapse spaces, uppercase only for comparison",
+    "cpf": "keep digits only; preserve leading zeros",
+    "dates": "convert Excel serial/date/string to dd/mm/yyyy",
+    "money": "Decimal; accept comma or dot; never float for business values"
+  },
+  "observed_mapping_from_recording": {
+    "main_sheet_name_hint": "ANEXO I - LEVANTAMENTO DO PRINCIPAL DEVIDO",
+    "name_column_hint": "C",
+    "admission_column_hint": "D",
+    "termination_column_hint": "E",
+    "cpf_sheet_name_hint": "lista_1200_cpf",
+    "history_value_columns_hint": [
+      "G",
+      "H"
+    ],
+    "warning": "São pistas observadas no vídeo, não contrato definitivo. Implementar detecção por cabeçalho e configuração."
+  },
+  "required_logical_fields": [
+    "nome",
+    "cpf",
+    "data_demissao",
+    "historicos"
+  ],
+  "join_strategy": [
+    "preferir matrícula/identificador único",
+    "senão CPF normalizado",
+    "nome normalizado apenas como fallback com detecção de ambiguidade"
+  ]
+}

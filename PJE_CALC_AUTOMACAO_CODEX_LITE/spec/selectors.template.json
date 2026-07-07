@@ -1,0 +1,56 @@
+{
+  "version": "0.1.0",
+  "base_url": "http://localhost:9257/pjecalc",
+  "notes": [
+    "Preencher após inspeção real do DOM.",
+    "Preferir data-testid/id estável; em JSF, usar sufixos de id e relação label/campo.",
+    "Manter múltiplas alternativas por elemento."
+  ],
+  "selectors": {
+    "home.importar_calculo": [
+      {
+        "by": "link_text",
+        "value": "Importar Cálculo"
+      },
+      {
+        "by": "xpath",
+        "value": "//a[contains(normalize-space(.),'Importar Cálculo')]"
+      }
+    ],
+    "import.file_input": [
+      {
+        "by": "css",
+        "value": "input[type='file']"
+      }
+    ],
+    "common.success_message": [
+      {
+        "by": "xpath",
+        "value": "//*[contains(normalize-space(.),'Operação realizada com sucesso')]"
+      }
+    ],
+    "calculo.nome_reclamante": [],
+    "calculo.cpf": [],
+    "calculo.data_final": [],
+    "calculo.salvar": [],
+    "menu.verbas": [],
+    "verbas.regerar": [],
+    "menu.fgts": [],
+    "fgts.regerar": [],
+    "fgts.confirmar": [],
+    "menu.contribuicao_social": [],
+    "contribuicao.regerar": [],
+    "contribuicao.confirmar": [],
+    "menu.historico_salarial": [],
+    "historico.editar": [],
+    "historico.competencia": [],
+    "historico.valor_input": [],
+    "historico.salvar": [],
+    "menu.liquidar": [],
+    "liquidar.executar": [],
+    "menu.imprimir": [],
+    "imprimir.executar": [],
+    "menu.exportar": [],
+    "exportar.executar": []
+  }
+}

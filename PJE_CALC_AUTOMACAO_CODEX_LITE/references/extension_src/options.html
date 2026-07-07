@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Configurações da Extensão</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 10px;
+    }
+    input {
+      width: 100px; /* Tamanho reduzido para caber até 9999 */
+      padding: 5px;
+      margin-bottom: 20px;
+    }
+    button {
+      padding: 10px 20px;
+      background-color: #4CAF50; /* Verde para ambos os botões */
+      color: white;
+      border: none;
+      cursor: pointer;
+      margin-right: 10px; /* Espaçamento entre os botões */
+    }
+    button:hover {
+      background-color: #45a049; /* Verde escuro no hover */
+    }
+  </style>
+</head>
+<body>
+  <h1>Configurações de Velocidade</h1>
+  <label for="timeout">Tempo de espera para a próxima execução (ms):</label>
+  <input type="number" id="timeout" min="1" max="200" step="1">
+  <button id="save">Salvar</button>
+
+  <script src="options.js"></script>
+</body>
+</html>

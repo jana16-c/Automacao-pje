@@ -1,0 +1,72 @@
+Manifest-Version: 1.0
+
+Name: help.html
+Digest-Algorithms: SHA1 SHA256
+SHA1-Digest: ybxN5Ai0lcqHWEBsybewov1LUaE=
+SHA256-Digest: MEkxwHNHcPPD9NC5sxR823cN+BGwQFG55UrPTs2F94o=
+
+Name: options.html
+Digest-Algorithms: SHA1 SHA256
+SHA1-Digest: hyUTEUZvCLrCE13FXAyz7dIM3Js=
+SHA256-Digest: 1782JTj8m0g3fVqaGO4Zp1OIvxSbmt7Z+XESDxFTaAo=
+
+Name: manifest.json
+Digest-Algorithms: SHA1 SHA256
+SHA1-Digest: VNZoSSr105NDh8racgOghh9X1ec=
+SHA256-Digest: ZTp8AG3lSQoeuhihlm/ecrjoc856PmABPZqIzfV1LDs=
+
+Name: background.js
+Digest-Algorithms: SHA1 SHA256
+SHA1-Digest: otXL3+IfRx1mp6F5CAx5qD3hoAY=
+SHA256-Digest: cVAUSuDZR51wZ12e6poRyH/CSS0LtCOD5P7p3ddGrk8=
+
+Name: content.js
+Digest-Algorithms: SHA1 SHA256
+SHA1-Digest: dv9aKLy2TODzKEy4ryZzojhv4GA=
+SHA256-Digest: 63c7bWJ4gxvehxL8CpL6DE+GyxYnX6FINDgGEet/nbQ=
+
+Name: options.js
+Digest-Algorithms: SHA1 SHA256
+SHA1-Digest: ivYuET5FruN3BRUGmRAnrhBaZ/0=
+SHA256-Digest: v3fJpVCYBDaYohQHp37eCjum/E4uOPIQ3nmAjKbkPmU=
+
+Name: icons/icon-48.png
+Digest-Algorithms: SHA1 SHA256
+SHA1-Digest: cnqTYoe6oQcNQZcW+Mle5J/15Oo=
+SHA256-Digest: eZJsFZqXpj/C/fbeYwG8rhC5bS4jCeSu3QmTvhtkeXU=
+
+Name: icons/gear.png
+Digest-Algorithms: SHA1 SHA256
+SHA1-Digest: 1Vcn1r5KKzb2of626falSKcPUTI=
+SHA256-Digest: LrbAGCOGJWbJOCvSoId7831OHJIjIOwR+IQ+RKjOZwg=
+
+Name: icons/arrow-right.png
+Digest-Algorithms: SHA1 SHA256
+SHA1-Digest: 1e0MXjvcKYg7AeqGTv+RACwobOM=
+SHA256-Digest: 24sRwhlNi4BFLrgoxb03Zt2GN7Htdf5Jq4ABuVFi1c0=
+
+Name: icons/arrow-right1.png
+Digest-Algorithms: SHA1 SHA256
+SHA1-Digest: 0/epkaZ2vyP0m6eTAg5YqWTA7XU=
+SHA256-Digest: TBcatwweMzCwpMSh71yLJx0N5ztdKZKLOZSf0EaoKKQ=
+
+Name: icons/arrow-down.png
+Digest-Algorithms: SHA1 SHA256
+SHA1-Digest: eN3aP7PYIUehn2vM9zUaBWvSFr4=
+SHA256-Digest: d0EvH0OgkmtPSgWafl12uwsNd4j0Xkgmtt1RiI2/34A=
+
+Name: icons/icon-96.png
+Digest-Algorithms: SHA1 SHA256
+SHA1-Digest: /h1wvICLuKKSwj5I8oD8dt7lZbk=
+SHA256-Digest: BazFNOFi52u+p/LqaULMUdUVvuuHc2Sa0Ivh7lJ76Cw=
+
+Name: icons/help.png
+Digest-Algorithms: SHA1 SHA256
+SHA1-Digest: oYvn+O2YHLzVHC8rCItdvgbA88k=
+SHA256-Digest: H8eOKRfYyJVSsIovt6+1B9aSZcfCePNysstHI/BIQNQ=
+
+Name: icons/arrow-down1.png
+Digest-Algorithms: SHA1 SHA256
+SHA1-Digest: ABhE07KNIYCP2uqBGSVRvjes/Q8=
+SHA256-Digest: z18WUhRlx3vrr7AbMYz4qdffGlCDvafgBrsbEc9qk0s=
+

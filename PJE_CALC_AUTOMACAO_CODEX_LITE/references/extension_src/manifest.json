@@ -1,0 +1,71 @@
+{
+  "manifest_version": 3,
+  "name": "Copiar e Colar no Pje-Calc 2.0",
+  "version": "2.2.3",
+  "description": "Extens\u00e3o para colar valores sequencialmente em campos de texto, nas grades de ocorr\u00eancias do Pje-Calc.",
+  "permissions": [
+    "activeTab",
+    "clipboardRead",
+    "contextMenus",
+    "storage"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*pjecalc*",
+        "https://*/*pjecalc*",
+        "http://localhost:9257/pjecalc*",
+        "https://localhost:9257/pjecalc*"
+      ],
+      "js": [
+        "content.js"
+      ]
+    }
+  ],
+  "commands": {
+    "paste-horizontal": {
+      "suggested_key": {
+        "default": "Ctrl+Alt+H",
+        "mac": "Command+Alt+H"
+      },
+      "description": "Colar valores na Horizontal"
+    },
+    "paste-vertical": {
+      "suggested_key": {
+        "default": "Ctrl+Alt+V",
+        "mac": "Command+Alt+V"
+      },
+      "description": "Colar valores na Vertical"
+    }
+  },
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "help.html",
+        "options.html",
+        "icons/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "portaldocalculista@gmail.com"
+    }
+  }
+}

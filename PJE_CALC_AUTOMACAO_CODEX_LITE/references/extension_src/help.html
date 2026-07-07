@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ajuda - Copiar e Colar no Pje-Calc</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      line-height: 1.6;
+      padding: 20px;
+      max-width: 800px;
+      margin: 0 auto;
+      text-align: justify;
+    }
+    h1, h2 {
+      color: #000;
+    }
+    p {
+      color: #000;
+    }
+    code {
+      background-color: #f4f4f4;
+      padding: 2px 5px;
+      border-radius: 3px;
+      font-family: monospace;
+    }
+    .section {
+      margin-bottom: 30px;
+    }
+    .section h2 {
+      border-bottom: 2px solid #4CAF50;
+      padding-bottom: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Copiar e Colar no Pje-Calc</h1>
+
+  <div class="section">
+    <h2>Introdução</h2>
+    <p>
+      A extensão <strong>Copiar e Colar no Pje-Calc</strong> foi desenvolvida para facilitar a colagem de valores sequencialmente, nas grades de ocorrências do Pje-Calc. Com esta extensão, você pode colar valores copiados de forma horizontal ou vertical, economizando tempo e esforço.
+    </p>
+  </div>
+
+  <div class="section">
+    <h2>Como Usar</h2>
+    <p>
+      O programa irá criar um menu, chamado <strong>Copiar e Colar no Pje-Calc</strong>, disponível quando clicar com o botão direito do mouse em um campo de preenchimento das grades de ocorrências. A opção <strong>Colar valores na Vertical</strong> estará disponível nas ocorrências de <strong>Histórico Salarial, Verbas, FGTS e Contribuição Social</strong>. Já a opção <strong>Colar valores na Horizontal</strong>, só está disponível nas ocorrências de <strong>Histórico Salarial</strong>. 
+    </p>
+    <p>
+      Para usar a extensão, siga os passos abaixo:
+    </p>
+    <ol>
+      <li>
+        <strong>Copie os valores</strong> que deseja colar. Os valores podem ser copiados de planilhas, arquivos PDF ou qualquer fonte que permita a cópia de valores em linha, ou em linhas e colunas.
+      </li>
+      <li>
+        <strong>Clique com o botão direito</strong> no primeiro campo de uma grade de ocorrências do Pje-Calc.
+      </li>
+      <li>
+        No menu <strong>Copiar e Colar no Pje-Calc</strong>, selecione uma das opções:
+        <ul>
+          <li><strong>Colar valores na Horizontal</strong>: Cola os valores sequencialmente da esquerda para a direita.</li>
+          <li><strong>Colar valores na Vertical</strong>: Cola os valores sequencialmente de cima para baixo.</li>
+        </ul>
+      </li>
+      <li>
+        A extensão irá colar os valores automaticamente nos campos de texto, seguindo a direção escolhida.
+      </li>
+    </ol>
+    <p>
+      A opção <strong>Colar valores na Vertical</strong> irá colar os valores copiados, de cima para baixo, na mesma ordem que foram copiados na fonte. Para isso, a quantidade de linhas a serem coladas deve ser menor ou igual a quantidade de linhas na grade de ocorrências.
+    </p>
+    <p>
+      Por exemplo, pode copiar uma coluna de quantidade de horas extras e colar nas ocorrências da verba de horas extras, começando do primeiro campo da grade de ocorrências referente as quantidades.
+    </p>
+    <p>
+      A opção <strong>Colar valores na Horizontal</strong>, como dito, só vai estar disponível na grade de ocorrências do Histórico Salarial e serve para copiar mais de um histórico, de uma vez só. 
+    </p>
+    <p>
+      Crie todos os Históricos Salariais, com valores zerados, na mesma ordem da fonte onde irá copiar os valores. 
+    </p>
+    <p>
+      Por exemplo, no PDF tem 5 (cinco) históricos salariais: <strong>Salário Base, Horas Extras Pagas, Adicional Noturno Pago, Gratificação paga e Anuênio Pago.</strong> 
+    </p>
+    <p>
+      No Pje-Calc crie os 5 (cinco) históricos salariais: <strong>Salário Base, Horas Extras Pagas, Adicional Noturno Pago, Gratificação paga e Anuênio Pago</strong>, todos com valores zerados. Os nomes podem até ser diferentes, mas a ordem deverá ser a mesma. A quantidade de linhas deve ser a mesma também. 
+    </p>
+    <p>
+      Após criar os 5 (cinco) históricos salariais, entre na Grade de Ocorrências. Nesse momento, teremos duas opções. <strong>Colar valores na Vertical</strong> e <strong>Colar valores na Horizontal.</strong> 
+    </p>
+    <p>
+      Escolhendo <strong>Colar valores na Vertical</strong>, o processo será o mesmo já detalhado anteriormente, copiando cada coluna de uma vez e colando na coluna respectiva do histórico já cadastrado. 
+    </p>
+    <p>
+      Usando o <strong>Colar valores na Horizontal</strong>, o programa ira colar a partir do primeiro campo do primeiro histórico salarial, passando para o primeiro campo do segundo histórico salarial, repetindo o processo até o final da linha. depois o programa irá repetir o processo para a segunda linha de cada histórico, até terminar de copiar todos os valores. 
+    </p>
+  </div>
+
+  <div class="section">
+    <h2>Configurações</h2>
+    <p>
+      A extensão permite configurar o tempo de execução (em milissegundos) entre cada colagem. Para ajustar o tempo de execução:
+    </p>
+    <ol>
+      <li>
+        Clique no ícone da extensão no navegador e selecione <strong>"Configurações"</strong>.
+      </li>
+      <li>
+        Na página de configurações, insira o tempo desejado (em milissegundos) no campo <strong>"Tempo de execução (ms)"</strong>.
+      </li>
+      <li>
+        Clique em <strong>"Salvar"</strong> para aplicar as alterações.
+      </li>
+    </ol>
+    <p>
+      O valor padrão é <strong>50 ms</strong>, mas você pode ajustá-lo conforme necessário. Quanto menor o valor, mais rápido será a execução da colagem.
+    </p>
+  </div>
+
+  <div class="section">
+    <h2>Problemas Comuns</h2>
+    <p>
+      Se você encontrar algum problema ao usar a extensão, verifique os seguintes pontos:
+    </p>
+    <ul>
+      <li>
+        <strong>Nenhum texto encontrado na área de transferência</strong>: Certifique-se de que copiou os valores antes de usar a extensão.
+      </li>
+      <li>
+        <strong>Erro ao ler a área de transferência</strong>: Verifique se a extensão tem permissão para acessar a área de transferência.
+      </li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>Suporte</h2>
+    <p>
+      Se você precisar de ajuda adicional ou encontrar algum problema, entre em contato através do email: <strong>portaldocalculista@gmail.com</strong>.
+    </p>
+  </div>
+</body>
+</html>
