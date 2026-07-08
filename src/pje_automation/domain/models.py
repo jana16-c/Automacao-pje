@@ -68,6 +68,7 @@ class OutputLayout:
 class AppPaths:
     model_file: Path
     excel_file: Path
+    history_file: Path | None
     output_dir: Path
 
 

@@ -22,6 +22,17 @@ def normalize_cpf(value: object) -> str:
     return digits.zfill(11) if digits else ""
 
 
+def normalize_registration(value: object) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    digits = "".join(ch for ch in str(value).strip() if ch.isdigit())
+    return digits or str(value).strip()
+
+
 def normalize_date(value: object) -> str | None:
     if value in (None, ""):
         return None
@@ -42,9 +53,35 @@ def normalize_date(value: object) -> str | None:
     return text or None
 
 
+def normalize_competencia(value: object) -> str | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.strftime("%m/%Y")
+    if isinstance(value, date):
+        return value.strftime("%m/%Y")
+    if isinstance(value, (int, float)):
+        base = datetime(1899, 12, 30)
+        return (base + timedelta(days=float(value))).strftime("%m/%Y")
+
+    text = str(value).strip()
+    for fmt in ("%m/%Y", "%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%m/%Y")
+        except ValueError:
+            continue
+    return text or None
+
+
 def parse_decimal(value: object) -> Decimal:
     if value in (None, ""):
         return Decimal("0.00")
+    if isinstance(value, Decimal):
+        return value.quantize(Decimal("0.01"))
+    if isinstance(value, int):
+        return Decimal(value).quantize(Decimal("0.01"))
+    if isinstance(value, float):
+        return Decimal(str(value)).quantize(Decimal("0.01"))
     text = str(value).strip().replace(".", "").replace(",", ".")
     try:
         return Decimal(text).quantize(Decimal("0.01"))

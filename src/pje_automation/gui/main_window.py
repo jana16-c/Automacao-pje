@@ -18,6 +18,7 @@ class MainWindow(tk.Tk):
 
         self.model_var = tk.StringVar()
         self.excel_var = tk.StringVar()
+        self.history_var = tk.StringVar()
         self.output_var = tk.StringVar()
         self.preview_var = tk.StringVar(value="Nenhuma validacao executada.")
 
@@ -28,21 +29,22 @@ class MainWindow(tk.Tk):
         frame.pack(fill="both", expand=True)
 
         self._path_row(frame, 0, "Modelo do PJe-Calc", self.model_var, self._pick_model)
-        self._path_row(frame, 1, "Excel com dados brutos", self.excel_var, self._pick_excel)
-        self._path_row(frame, 2, "Pasta de saida", self.output_var, self._pick_output)
+        self._path_row(frame, 1, "Excel de cadastro", self.excel_var, self._pick_excel)
+        self._path_row(frame, 2, "Excel de historico (opcional)", self.history_var, self._pick_history)
+        self._path_row(frame, 3, "Pasta de saida", self.output_var, self._pick_output)
 
         actions = ttk.Frame(frame)
-        actions.grid(row=3, column=0, columnspan=3, sticky="w", pady=(12, 12))
+        actions.grid(row=4, column=0, columnspan=3, sticky="w", pady=(12, 12))
         ttk.Button(actions, text="Validar", command=self._validate).pack(side="left")
         ttk.Button(actions, text="Mapear PJe", command=self._probe).pack(side="left", padx=(8, 0))
         ttk.Button(actions, text="Executar MVP", command=self._run_mvp).pack(side="left", padx=(8, 0))
 
         self.progress = ProgressView(frame)
-        self.progress.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(0, 12))
+        self.progress.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(0, 12))
 
-        ttk.Label(frame, text="Preview").grid(row=5, column=0, sticky="w")
+        ttk.Label(frame, text="Preview").grid(row=6, column=0, sticky="w")
         self.preview_box = tk.Text(frame, height=18, width=96)
-        self.preview_box.grid(row=6, column=0, columnspan=3, sticky="nsew")
+        self.preview_box.grid(row=7, column=0, columnspan=3, sticky="nsew")
 
         for column in range(3):
             frame.columnconfigure(column, weight=1)
@@ -62,6 +64,11 @@ class MainWindow(tk.Tk):
         if path:
             self.excel_var.set(path)
 
+    def _pick_history(self) -> None:
+        path = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xlsm")])
+        if path:
+            self.history_var.set(path)
+
     def _pick_output(self) -> None:
         path = filedialog.askdirectory()
         if path:
@@ -73,6 +80,7 @@ class MainWindow(tk.Tk):
                 Path(self.model_var.get()),
                 Path(self.excel_var.get()),
                 Path(self.output_var.get()),
+                Path(self.history_var.get()) if self.history_var.get() else None,
             )
         except Exception as exc:
             self.progress.set_status("Falha na validacao.", str(exc))
@@ -103,6 +111,7 @@ class MainWindow(tk.Tk):
                 Path(self.model_var.get()),
                 Path(self.excel_var.get()),
                 Path(self.output_var.get()),
+                Path(self.history_var.get()) if self.history_var.get() else None,
             )
         except Exception as exc:
             self.progress.set_status("Falha na execucao.", str(exc))

@@ -18,6 +18,9 @@ dependencies = [
 dev = [
   "pytest>=8.2,<9",
 ]
+build = [
+  "pyinstaller>=6.10,<7",
+]
 
 [project.scripts]
 pje-automation = "pje_automation.__main__:main"

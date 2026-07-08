@@ -1,6 +1,13 @@
 from decimal import Decimal
 
-from pje_automation.excel.normalization import normalize_cpf, normalize_date, normalize_header, parse_decimal
+from pje_automation.excel.normalization import (
+    normalize_competencia,
+    normalize_cpf,
+    normalize_date,
+    normalize_header,
+    normalize_registration,
+    parse_decimal,
+)
 
 
 def test_normalize_cpf_preserves_leading_zeroes() -> None:
@@ -17,3 +24,15 @@ def test_normalize_header_removes_accents() -> None:
 
 def test_parse_decimal_accepts_brazilian_format() -> None:
     assert parse_decimal("1.234,56") == Decimal("1234.56")
+
+
+def test_normalize_competencia_keeps_month_year() -> None:
+    assert normalize_competencia("07/2012") == "07/2012"
+
+
+def test_normalize_registration_removes_decimal_noise() -> None:
+    assert normalize_registration(1007592.0) == "1007592"
+
+
+def test_parse_decimal_preserves_excel_numeric_cells() -> None:
+    assert parse_decimal(18.54) == Decimal("18.54")

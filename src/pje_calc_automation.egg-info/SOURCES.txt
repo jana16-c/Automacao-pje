@@ -41,6 +41,10 @@ src/pje_calc_automation.egg-info/dependency_links.txt
 src/pje_calc_automation.egg-info/entry_points.txt
 src/pje_calc_automation.egg-info/requires.txt
 src/pje_calc_automation.egg-info/top_level.txt
+tests/test_app.py
+tests/test_excel_mapper.py
 tests/test_normalization.py
 tests/test_output_validation.py
+tests/test_resources.py
 tests/test_safe_names.py
+tests/test_workflow.py

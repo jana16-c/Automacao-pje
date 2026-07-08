@@ -1,18 +1,25 @@
 from __future__ import annotations
 
+import re
 import shutil
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import sleep
+
+from selenium.webdriver.common.by import By
 
 from pje_automation.diagnostics.evidence import save_evidence
 from pje_automation.domain.errors import WorkflowExecutionError
-from pje_automation.domain.models import Record
+from pje_automation.domain.models import HistoricalSeries, Record
+from pje_automation.excel.normalization import normalize_cpf, normalize_name_key
 from pje_automation.domain.states import JobState
 from pje_automation.persistence.repository import JobRepository
 from pje_automation.pje.browser import BrowserManager
 from pje_automation.pje.downloads import collect_pdf, collect_pjc
 from pje_automation.pje.selectors import SelectorRepository
-from pje_automation.pje.waits import wait_for_condition, wait_for_element, wait_for_page_ready, wait_for_present_element
+from pje_automation.pje.waits import wait_for_condition, wait_for_page_ready, wait_for_present_element
 from pje_automation.utils.names import sanitize_filename
 from pje_automation.validation.outputs import validate_pdf, validate_pje_archive
 
@@ -87,25 +94,76 @@ class Workflow:
     def _fill_identity(self, driver, record: Record) -> None:
         self.repository.upsert(record, JobState.PREENCHENDO_IDENTIFICACAO)
         self._fill_first_available(driver, "calculo.nome_reclamante", record.nome)
+        self._ensure_cpf_selected(driver)
+        self._wait_for_field_enabled(driver, "calculo.cpf")
         self._fill_first_available(driver, "calculo.cpf", record.cpf)
-        if record.data_demissao:
-            self._click_required(driver, "calculo.tab_parametros")
-            self._fill_first_available(driver, "calculo.data_final", record.data_demissao)
+        self._wait_for_field_match(driver, "calculo.cpf", lambda current: normalize_cpf(current) == normalize_cpf(record.cpf))
         self.repository.upsert(record, JobState.SALVANDO_PARAMETROS)
         self._click_required(driver, "calculo.salvar")
-        self._wait_for_idle(driver)
+        self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
+        if record.data_demissao:
+            self._open_parameters_tab(driver)
+            self._fill_field_if_needed(driver, "calculo.data_demissao", record.data_demissao)
+            self._wait_for_field_value(driver, "calculo.data_demissao", record.data_demissao)
+            self._fill_field_if_needed(driver, "calculo.data_final", record.data_demissao)
+            self._wait_for_field_value(driver, "calculo.data_final", record.data_demissao)
+            self._wait_for_idle(driver)
+            self.repository.upsert(record, JobState.SALVANDO_PARAMETROS)
+            self._click_required(driver, "calculo.salvar")
+            self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
+
+    def _ensure_cpf_selected(self, driver) -> None:
+        for locator in self.selectors.get("calculo.cpf_tipo_cpf"):
+            try:
+                element = wait_for_present_element(driver, locator, timeout=self._element_timeout_seconds())
+                driver.execute_script("arguments[0].click();", element)
+                self._wait_for_idle(driver)
+                return
+            except Exception:
+                continue
+        raise WorkflowExecutionError("SELECTOR_NOT_FOUND", "Nao foi possivel marcar o tipo de documento CPF.")
 
     def _fill_first_available(self, driver, selector_key: str, value: str) -> None:
         for locator in self.selectors.get(selector_key):
             try:
-                field = wait_for_present_element(driver, locator)
+                field = wait_for_present_element(driver, locator, timeout=self._element_timeout_seconds())
                 self._set_field_value(driver, field, value)
                 return
             except Exception:
                 continue
         raise WorkflowExecutionError("SELECTOR_NOT_FOUND", f"Nao foi possivel preencher {selector_key}.")
 
+    def _fill_field_if_needed(self, driver, selector_key: str, value: str) -> None:
+        current_value = self._get_first_field_value(driver, selector_key)
+        if current_value == value:
+            return
+        self._fill_first_available(driver, selector_key, value)
+
+    def _get_first_field_value(self, driver, selector_key: str) -> str:
+        for locator in self.selectors.get(selector_key):
+            try:
+                field = wait_for_present_element(driver, locator, timeout=self._element_timeout_seconds())
+                return (field.get_attribute("value") or "").strip()
+            except Exception:
+                continue
+        return ""
+
     def _set_field_value(self, driver, field, value: str) -> None:
+        field_id = field.get_attribute("id") or ""
+        if field_id.endswith("InputDate"):
+            driver.execute_script(
+                """
+                arguments[0].value = arguments[1];
+                arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+                arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+                arguments[0].dispatchEvent(new Event('blur', { bubbles: true }));
+                """,
+                field,
+                value,
+            )
+            self._sync_calendar_hidden_value(driver, field, value)
+            return
+
         disabled = field.get_attribute("disabled")
         readonly = field.get_attribute("readonly")
         if disabled or readonly or not field.is_enabled():
@@ -121,6 +179,7 @@ class Workflow:
                 field,
                 value,
             )
+            self._sync_calendar_hidden_value(driver, field, value)
             return
 
         try:
@@ -128,6 +187,8 @@ class Workflow:
             field.click()
             field.clear()
             field.send_keys(value)
+            self._sync_calendar_hidden_value(driver, field, value)
+            self._pace()
         except Exception:
             driver.execute_script(
                 """
@@ -139,16 +200,117 @@ class Workflow:
                 field,
                 value,
             )
+            self._sync_calendar_hidden_value(driver, field, value)
+            self._pace()
+
+    def _open_parameters_tab(self, driver) -> None:
+        switched = False
+        try:
+            switched = bool(
+                driver.execute_script(
+                    """
+                    const panelInput = document.getElementById('formulario:j_id138_input');
+                    if (!panelInput || !window.RichFaces || typeof RichFaces.switchTab !== 'function') {
+                      return false;
+                    }
+                    RichFaces.switchTab('formulario:j_id138', 'formulario:tabParametrosCalculo', 'tabParametrosCalculo');
+                    return true;
+                    """
+                )
+            )
+        except Exception:
+            switched = False
+        if not switched:
+            self._click_required(driver, "calculo.tab_parametros")
+        self._wait_for_parameters_tab_ready(driver)
+
+    def _wait_for_parameters_tab_ready(self, driver) -> None:
+        def _parameters_ready(current_driver) -> bool:
+            return bool(
+                current_driver.execute_script(
+                    """
+                    const panel = document.getElementById('formulario:tabParametrosCalculo');
+                    const input = document.getElementById('formulario:j_id138_input');
+                    const demissao = document.getElementById('formulario:dataDemissaoInputDate');
+                    if (!panel || !input || !demissao) {
+                      return false;
+                    }
+                    const style = window.getComputedStyle(panel);
+                    return input.value === 'tabParametrosCalculo' && style.display !== 'none';
+                    """
+                )
+            )
+
+        wait_for_condition(driver, _parameters_ready, timeout=self._operation_timeout_seconds())
+        self._wait_for_idle(driver)
+
+    def _sync_calendar_hidden_value(self, driver, field, value: str) -> None:
+        field_id = field.get_attribute("id") or ""
+        if not field_id.endswith("InputDate"):
+            return
+        hidden_id = field_id.replace("InputDate", "InputCurrentDate")
+        try:
+            month_year = datetime.strptime(value, "%d/%m/%Y").strftime("%m/%Y")
+        except ValueError:
+            return
+        driver.execute_script(
+            """
+            const hidden = document.getElementById(arguments[0]);
+            if (!hidden) {
+              return;
+            }
+            hidden.value = arguments[1];
+            hidden.dispatchEvent(new Event('input', { bubbles: true }));
+            hidden.dispatchEvent(new Event('change', { bubbles: true }));
+            """,
+            hidden_id,
+            month_year,
+        )
+
+    def _wait_for_field_value(self, driver, selector_key: str, expected_value: str, timeout: int = 15) -> None:
+        self._wait_for_field_match(driver, selector_key, lambda current: current == expected_value, timeout=timeout)
+
+    def _wait_for_field_match(self, driver, selector_key: str, predicate, timeout: int = 15) -> None:
+        effective_timeout = max(timeout, self._element_timeout_seconds())
+        for locator in self.selectors.get(selector_key):
+            try:
+                def _matches(current_driver) -> bool:
+                    field = wait_for_present_element(current_driver, locator, timeout=effective_timeout)
+                    current_value = (field.get_attribute("value") or "").strip()
+                    return predicate(current_value)
+
+                wait_for_condition(driver, _matches, timeout=effective_timeout)
+                return
+            except Exception:
+                continue
+        raise WorkflowExecutionError("FIELD_NOT_PERSISTED", f"O campo {selector_key} nao permaneceu com o valor esperado.")
+
+    def _wait_for_field_enabled(self, driver, selector_key: str, timeout: int = 15) -> None:
+        effective_timeout = max(timeout, self._element_timeout_seconds())
+        for locator in self.selectors.get(selector_key):
+            try:
+                def _enabled(current_driver) -> bool:
+                    field = wait_for_present_element(current_driver, locator, timeout=effective_timeout)
+                    disabled = field.get_attribute("disabled")
+                    return field.is_enabled() and not disabled
+
+                wait_for_condition(driver, _enabled, timeout=effective_timeout)
+                return
+            except Exception:
+                continue
+        raise WorkflowExecutionError("FIELD_DISABLED", f"O campo {selector_key} nao habilitou para preenchimento.")
 
     def _click_required(self, driver, selector_key: str, url_fragment: str | None = None) -> None:
         for locator in self.selectors.get(selector_key):
             try:
-                element = wait_for_present_element(driver, locator)
+                element = wait_for_present_element(driver, locator, timeout=self._element_timeout_seconds())
                 driver.execute_script("arguments[0].click();", element)
                 if url_fragment:
-                    wait_for_condition(driver, lambda current: url_fragment in current.current_url, timeout=30)
+                    wait_for_condition(driver, lambda current: url_fragment in current.current_url, timeout=self._operation_timeout_seconds())
                 self._wait_for_idle(driver)
                 return
+            except WorkflowExecutionError:
+                raise
             except Exception:
                 continue
         raise WorkflowExecutionError("SELECTOR_NOT_FOUND", f"Nao foi possivel acionar {selector_key}.")
@@ -157,7 +319,7 @@ class Workflow:
         try:
             for locator in self.selectors.get(selector_key):
                 try:
-                    element = wait_for_present_element(driver, locator)
+                    element = wait_for_present_element(driver, locator, timeout=self._element_timeout_seconds())
                     driver.execute_script("arguments[0].click();", element)
                     self._wait_for_idle(driver)
                     return
@@ -167,32 +329,51 @@ class Workflow:
             return
 
     def _wait_for_idle(self, driver) -> None:
-        wait_for_page_ready(driver, timeout=30)
+        wait_for_page_ready(driver, timeout=self._element_timeout_seconds())
+        self._raise_if_known_business_error(driver)
+        self._raise_if_server_error(driver)
+        self._pace()
 
     def _refresh_verbas(self, driver, record: Record) -> None:
         self.repository.upsert(record, JobState.REGERANDO_VERBAS)
-        self._click_required(driver, "menu.verbas")
+        self._click_required(driver, "menu.verbas", url_fragment="verba-calculo.jsf")
+        selected = self._select_verbas_for_regeneration(driver)
+        if selected <= 0:
+            raise WorkflowExecutionError(
+                "VERBAS_SEM_SELECAO",
+                "Nenhuma verba principal ou reflexo selecionavel foi encontrada para regeracao.",
+            )
+        self._click_required(driver, "verbas.regerar")
+        self._confirm_regeneration(driver, "verbas")
 
     def _refresh_fgts(self, driver, record: Record) -> None:
         self.repository.upsert(record, JobState.REGERANDO_FGTS)
         self._click_required(driver, "menu.fgts", url_fragment="fgts.jsf")
-        self._click_required(driver, "fgts.salvar")
+        self._click_required(driver, "fgts.ocorrencias", url_fragment="parametrizar-fgts.jsf")
+        self._click_required(driver, "fgts.regerar")
+        self._confirm_regeneration(driver, "fgts")
 
     def _refresh_contribuicao_social(self, driver, record: Record) -> None:
         self.repository.upsert(record, JobState.REGERANDO_CONTRIBUICAO_SOCIAL)
         self._click_required(driver, "menu.contribuicao_social", url_fragment="inss.jsf")
-        self._click_required(driver, "contribuicao.salvar")
+        self._click_required(driver, "contribuicao.ocorrencias")
+        self._click_required(driver, "contribuicao.regerar")
+        self._confirm_regeneration(driver, "contribuicao")
 
     def _process_historico(self, driver, record: Record) -> None:
         self.repository.upsert(record, JobState.PREENCHENDO_HISTORICO)
         self._click_required(driver, "menu.historico_salarial", url_fragment="historico-salarial.jsf")
-        if not any(serie.valores for serie in record.historicos):
+        historicos = [serie for serie in record.historicos if serie.valores]
+        if not historicos:
             return
+        for index, serie in enumerate(historicos):
+            if index:
+                self._click_required(driver, "menu.historico_salarial", url_fragment="historico-salarial.jsf")
+            self._edit_historical_series(driver, serie)
 
     def _liquidate_and_export(self, driver, record: Record, pdf_dir: Path, pjc_dir: Path) -> None:
         self.repository.upsert(record, JobState.LIQUIDANDO)
-        self._click_required(driver, "menu.liquidar", url_fragment="liquidacao.jsf")
-        self._click_required(driver, "liquidar.executar")
+        self._run_liquidation(driver)
 
         self.repository.upsert(record, JobState.GERANDO_PDF)
         safe_name = sanitize_filename(record.nome)
@@ -201,7 +382,7 @@ class Workflow:
         if not download_dir:
             raise WorkflowExecutionError("DOWNLOAD_CONFIG", "Nao foi possivel determinar o diretorio de download do navegador.")
 
-        self._click_required(driver, "menu.imprimir", url_fragment="relatorio-calculo.jsf")
+        self._open_print_page_ready(driver)
         self._click_required(driver, "imprimir.executar")
         pdf_path = collect_pdf(download_dir)
         validate_pdf(pdf_path)
@@ -215,3 +396,401 @@ class Workflow:
         shutil.move(str(pjc_path), pjc_dir / f"{safe_name}.pjc")
 
         self.repository.upsert(record, JobState.VALIDANDO_SAIDAS)
+
+    def _confirm_regeneration(self, driver, selector_prefix: str) -> None:
+        self._click_if_present(driver, f"{selector_prefix}.manter_alteracoes", timeout=5)
+        self._click_if_present(driver, f"{selector_prefix}.confirmar", timeout=5)
+        self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
+
+    def _run_liquidation(self, driver) -> None:
+        self._click_required(driver, "menu.liquidar", url_fragment="liquidacao.jsf")
+        self._click_required(driver, "liquidar.executar")
+        self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
+
+    def _open_print_page_ready(self, driver) -> None:
+        self._click_required(driver, "menu.imprimir", url_fragment="relatorio-calculo.jsf")
+        if self._has_stale_report_error(driver):
+            self._run_liquidation(driver)
+            self._click_required(driver, "menu.imprimir", url_fragment="relatorio-calculo.jsf")
+            if self._has_stale_report_error(driver):
+                raise WorkflowExecutionError(
+                    "RELATORIO_DESATUALIZADO",
+                    "O PJe continuou exigindo nova liquidacao antes da impressao.",
+                )
+
+    def _edit_historical_series(self, driver, serie: HistoricalSeries) -> None:
+        row_index = self._find_history_row(driver, serie.nome)
+        edit_button = wait_for_present_element(driver, (By.ID, f"formulario:listagem:{row_index}:alterarHistorico"))
+        driver.execute_script("arguments[0].click();", edit_button)
+        self._wait_for_idle(driver)
+
+        self._click_optional(driver, "historico.tipo_valor_informado")
+        self._fill_historical_grid(driver, serie)
+        self._click_required(driver, "historico.salvar")
+        self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
+
+    def _find_history_row(self, driver, historico_nome: str) -> int:
+        normalized_name = normalize_name_key(historico_nome)
+        row_index = driver.execute_script(
+            """
+            const target = arguments[0];
+            const rows = Array.from(document.querySelectorAll("[id^='formulario:listagem:'][id$=':nome']"));
+            for (const row of rows) {
+              const text = (row.value || row.innerText || row.textContent || '').trim();
+              const normalized = text
+                .normalize('NFD')
+                .replace(/[\\u0300-\\u036f]/g, '')
+                .replace(/[_-]+/g, ' ')
+                .replace(/\\s+/g, ' ')
+                .trim()
+                .toUpperCase();
+              if (normalized !== target) {
+                continue;
+              }
+              const match = row.id.match(/formulario:listagem:(\\d+):nome$/);
+              if (match) {
+                return Number(match[1]);
+              }
+            }
+            return null;
+            """,
+            normalized_name,
+        )
+        if row_index is None:
+            row_index = self._find_history_row_by_similarity(driver, historico_nome)
+        if row_index is None:
+            raise WorkflowExecutionError("HISTORICO_NOT_FOUND", f"Historico salarial nao localizado: {historico_nome}")
+        return int(row_index)
+
+    def _find_history_row_by_similarity(self, driver, historico_nome: str) -> int | None:
+        rows = driver.execute_script(
+            """
+            return Array.from(document.querySelectorAll("[id^='formulario:listagem:'][id$=':nome']")).map((row) => {
+              const match = row.id.match(/formulario:listagem:(\\d+):nome$/);
+              if (!match) {
+                return null;
+              }
+              return {
+                index: Number(match[1]),
+                nome: (row.value || row.innerText || row.textContent || '').trim(),
+              };
+            }).filter(Boolean);
+            """
+        )
+        target_tokens = self._history_name_tokens(historico_nome)
+        if not target_tokens:
+            return None
+
+        best_index: int | None = None
+        best_score = 0.0
+        for item in rows:
+            candidate_tokens = self._history_name_tokens(item["nome"])
+            if not candidate_tokens:
+                continue
+            intersection = len(target_tokens & candidate_tokens)
+            score = intersection / max(len(target_tokens), len(candidate_tokens))
+            if "NOTURNO" in target_tokens and "NOTURNO" in candidate_tokens:
+                score += 0.5
+            if "ADICIONAL" in target_tokens and "ADICIONAL" in candidate_tokens:
+                score += 0.25
+            if score > best_score:
+                best_score = score
+                best_index = int(item["index"])
+        if best_score < 0.6:
+            return None
+        return best_index
+
+    def _history_name_tokens(self, value: str) -> set[str]:
+        normalized = (
+            value.upper()
+            .replace("ADI", "ADICIONAL ")
+            .replace("AD.", "ADICIONAL ")
+            .replace("AD ", "ADICIONAL ")
+            .replace("NOT.", "NOTURNO ")
+            .replace("NOT ", "NOTURNO ")
+            .replace("REFLE", "REFLEXO ")
+        )
+        tokens = {
+            token
+            for token in re.findall(r"[A-Z0-9]+", normalized)
+            if token
+        }
+        replacements = {
+            "DIF": "DIFERENCA",
+            "AD": "ADICIONAL",
+            "ADI": "ADICIONAL",
+            "NOT": "NOTURNO",
+            "REFLEXOS": "REFLEXO",
+        }
+        expanded = {replacements.get(token, token) for token in tokens}
+        stop_tokens = {
+            "DIF",
+            "DIFERENCA",
+            "REFLEXO",
+            "XOS",
+            "PAGO",
+            "DIV",
+            "CALCULO",
+            "HOMOLOGADO",
+            "VALOR",
+            "BASE",
+            "DO",
+            "DA",
+            "DE",
+            "220",
+        }
+        return {token for token in expanded if token not in stop_tokens}
+
+    def _fill_historical_grid(self, driver, serie: HistoricalSeries) -> None:
+        grid_rows = driver.execute_script(
+            """
+            return Array.from(document.querySelectorAll("[id^='formulario:listagemMC:'][id$=':valor']")).map((input) => {
+              const match = input.id.match(/formulario:listagemMC:(\\d+):valor$/);
+              if (!match) {
+                return null;
+              }
+              const rowIndex = match[1];
+              const competencia = document.getElementById(`formulario:listagemMC:${rowIndex}:data`);
+              if (!competencia) {
+                return null;
+              }
+              return { competencia: (competencia.textContent || '').trim(), id: input.id };
+            }).filter(Boolean);
+            """
+        )
+        input_by_competencia = {item["competencia"]: item["id"] for item in grid_rows}
+        missing = [item.competencia for item in serie.valores if item.competencia not in input_by_competencia]
+        if missing:
+            raise WorkflowExecutionError(
+                "HISTORICO_COMPETENCIA",
+                f"Competencias nao encontradas no historico: {', '.join(missing[:5])}",
+            )
+
+        values_by_competencia = {item["competencia"]: "0,00" for item in grid_rows}
+        values_by_competencia.update({item.competencia: self._format_currency(item.valor) for item in serie.valores})
+        payload = [{"id": item["id"], "value": values_by_competencia[item["competencia"]]} for item in grid_rows]
+        result = driver.execute_async_script(
+            """
+            const payload = arguments[0];
+            const delayMs = arguments[1];
+            const done = arguments[arguments.length - 1];
+            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+            (async () => {
+              let written = 0;
+              for (const item of payload) {
+                const input = document.getElementById(item.id);
+                if (!input) {
+                  continue;
+                }
+                input.focus();
+                input.value = item.value;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                input.dispatchEvent(new Event('blur', { bubbles: true }));
+                written += 1;
+                if (delayMs > 0) {
+                  await sleep(delayMs);
+                }
+              }
+              done({ ok: true, written });
+            })().catch(error => done({ ok: false, error: String(error) }));
+            """,
+            payload,
+            self._history_delay_ms(),
+        )
+        if not result or not result.get("ok"):
+            raise WorkflowExecutionError("HISTORICO_PREENCHIMENTO", f"Falha ao preencher historico salarial: {result}")
+        self._wait_for_idle(driver)
+        if self._history_validation_enabled():
+            self._validate_history_grid(driver, payload)
+
+    def _format_currency(self, value: Decimal) -> str:
+        return f"{value.quantize(Decimal('0.01')):.2f}".replace(".", ",")
+
+    def _select_verbas_for_regeneration(self, driver) -> int:
+        selected = driver.execute_script(
+            """
+            const normalize = (value) => (value || '')
+              .normalize('NFD')
+              .replace(/[\\u0300-\\u036f]/g, '')
+              .replace(/\\s+/g, ' ')
+              .trim()
+              .toUpperCase();
+            const isCandidate = (input) => {
+              if (!input || input.disabled || input.type !== 'checkbox') {
+                return false;
+              }
+              const id = input.id || '';
+              const name = input.name || '';
+              if (id.includes('tipoRegeracao') || name.includes('tipoRegeracao')) {
+                return false;
+              }
+              const row = input.closest('tr');
+              const rowText = normalize(row ? (row.innerText || row.textContent) : '');
+              return rowText.includes('VERBA PRINCIPAL') || rowText.includes('REFLEXO');
+            };
+            const preferred = Array.from(document.querySelectorAll("input[type='checkbox']")).filter(isCandidate);
+            const fallback = Array.from(document.querySelectorAll("tr input[type='checkbox']")).filter((input) => {
+              if (!input || input.disabled || input.checked) {
+                return false;
+              }
+              const id = input.id || '';
+              const name = input.name || '';
+              return !id.includes('tipoRegeracao') && !name.includes('tipoRegeracao');
+            });
+            const targets = preferred.length ? preferred : fallback;
+            let count = 0;
+            for (const input of targets) {
+              if (input.checked) {
+                count += 1;
+                continue;
+              }
+              input.click();
+              input.dispatchEvent(new Event('change', { bubbles: true }));
+              if (input.checked) {
+                count += 1;
+              }
+            }
+            return count;
+            """
+        )
+        self._wait_for_idle(driver)
+        return int(selected or 0)
+
+    def _wait_for_success_feedback(self, driver, timeout: int) -> None:
+        def _success_visible(current_driver) -> bool:
+            try:
+                self._raise_if_known_business_error(current_driver)
+                self._raise_if_server_error(current_driver)
+                return bool(
+                    current_driver.execute_script(
+                        """
+                        const labels = Array.from(document.querySelectorAll('.sucesso .rich-messages-label, .sucesso, #divMensagem'));
+                        const text = labels.map((node) => node.innerText || node.textContent || '').join(' ').toUpperCase();
+                        return text.includes('OPERAÇÃO REALIZADA COM SUCESSO') || text.includes('OPERACAO REALIZADA COM SUCESSO');
+                        """
+                    )
+                )
+            except WorkflowExecutionError:
+                raise
+            except Exception:
+                return False
+
+        wait_for_condition(driver, _success_visible, timeout=timeout)
+        self._wait_for_idle(driver)
+
+    def _has_stale_report_error(self, driver) -> bool:
+        try:
+            return bool(
+                driver.execute_script(
+                    """
+                    const text = (document.body.innerText || document.body.textContent || '')
+                      .normalize('NFD')
+                      .replace(/[\\u0300-\\u036f]/g, '')
+                      .toUpperCase();
+                    return text.includes('E NECESSARIO LIQUIDAR NOVAMENTE PARA ATUALIZACAO DE DADOS DOS RELATORIOS');
+                    """
+                )
+            )
+        except Exception:
+            return False
+
+    def _operation_timeout_seconds(self) -> int:
+        return int(self.browser_manager.config["pje_calc"].get("operation_timeout_seconds", 180))
+
+    def _click_if_present(self, driver, selector_key: str, timeout: int = 30) -> bool:
+        effective_timeout = max(timeout, self._element_timeout_seconds())
+        try:
+            for locator in self.selectors.get(selector_key):
+                try:
+                    element = wait_for_present_element(driver, locator, timeout=effective_timeout)
+                    driver.execute_script("arguments[0].click();", element)
+                    self._wait_for_idle(driver)
+                    return True
+                except Exception:
+                    continue
+        except Exception:
+            return False
+        return False
+
+    def _page_text(self, driver) -> str:
+        return str(
+            driver.execute_script(
+                """
+                return (document.body.innerText || document.body.textContent || '')
+                  .normalize('NFD')
+                  .replace(/[\\u0300-\\u036f]/g, '')
+                  .replace(/\\s+/g, ' ')
+                  .trim()
+                  .toUpperCase();
+                """
+            )
+        )
+
+    def _raise_if_known_business_error(self, driver) -> None:
+        try:
+            page_text = self._page_text(driver)
+        except Exception:
+            return
+
+        if "E NECESSARIO SELECIONAR PELO MENOS UMA VERBA PRINCIPAL OU REFLEXO" in page_text:
+            raise WorkflowExecutionError(
+                "VERBAS_SEM_SELECAO",
+                "O PJe exige selecionar pelo menos uma Verba Principal ou Reflexo antes de regerar.",
+            )
+        if "REGERAR AS OCORRENCIAS DO FGTS" in page_text:
+            raise WorkflowExecutionError(
+                "FGTS_REGERAR_PENDENTE",
+                "A liquidacao indicou que o FGTS precisa ser regerado novamente antes de prosseguir.",
+            )
+        if "REGERAR AS OCORRENCIAS DA CONTRIBUICAO SOCIAL" in page_text or "REGERAR AS OCORRENCIAS DE CONTRIBUICAO SOCIAL" in page_text:
+            raise WorkflowExecutionError(
+                "CONTRIBUICAO_REGERAR_PENDENTE",
+                "A liquidacao indicou que a Contribuicao Social precisa ser regerada novamente antes de prosseguir.",
+            )
+
+    def _raise_if_server_error(self, driver) -> None:
+        try:
+            page_text = self._page_text(driver)
+        except Exception:
+            return
+        if "ERRO INTERNO NO SERVIDOR" in page_text or "OCORREU UM ERRO INESPERADO NO SISTEMA" in page_text:
+            raise WorkflowExecutionError(
+                "PJE_SERVER_ERROR",
+                "O PJe retornou erro interno no servidor durante a execucao.",
+            )
+
+    def _validate_history_grid(self, driver, payload: list[dict[str, str]]) -> None:
+        snapshot = driver.execute_script(
+            """
+            const payload = arguments[0];
+            return {
+              count: document.querySelectorAll("[id^='formulario:listagemMC:'][id$=':valor']").length,
+              values: payload.map((item) => {
+                const input = document.getElementById(item.id);
+                return { id: item.id, expected: item.value, current: input ? (input.value || '') : null };
+              }),
+            };
+            """,
+            payload,
+        )
+        if int(snapshot.get("count") or 0) != len(payload):
+            raise WorkflowExecutionError("HISTORICO_VALIDACAO", "A grade do historico mudou durante o preenchimento.")
+        invalid = [item for item in snapshot.get("values", []) if (item.get("current") or "").strip() != item.get("expected")]
+        if invalid:
+            raise WorkflowExecutionError("HISTORICO_VALIDACAO", "O PJe nao manteve todos os valores do historico salarial.")
+
+    def _element_timeout_seconds(self) -> int:
+        return int(self.browser_manager.config["pje_calc"].get("element_timeout_seconds", 30))
+
+    def _history_delay_ms(self) -> int:
+        return int(self.browser_manager.config.get("history_paste", {}).get("delay_ms", 25))
+
+    def _history_validation_enabled(self) -> bool:
+        return bool(self.browser_manager.config.get("history_paste", {}).get("validate_first_last_and_count", True))
+
+    def _pace(self) -> None:
+        delay_ms = int(self.browser_manager.config.get("execution", {}).get("step_delay_ms", 0))
+        if delay_ms > 0:
+            sleep(delay_ms / 1000)

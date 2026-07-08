@@ -184,17 +184,24 @@ Critério de sucesso:
 - mensagem de sucesso
 - processamento concluído
 - valor persistido no campo após recarga
+- a automação só deve avançar depois da faixa verde `Sucesso. Operação realizada com sucesso.`
 
 ### Fase C. Regeneração de Verbas
 
 1. Abrir `Verbas`.
-2. Executar a regeneração real da tela, se houver botão ou grade de ocorrências.
-3. Confirmar qualquer diálogo de regeneração.
+2. Selecionar pelo menos uma linha de `Verba Principal` ou `Reflexo`.
+3. Clicar em `Regerar`.
+4. Confirmar o diálogo `OK`, se ele aparecer.
 
 Critério de sucesso:
 
 - sucesso visual
 - retorno estável para a tela de `Verbas`
+- faixa verde de sucesso
+
+Erro real mapeado no vídeo:
+
+- se nenhuma linha for selecionada, o PJe bloqueia com `É necessário selecionar pelo menos uma Verba Principal ou Reflexo.`
 
 ### Fase D. Regeneração de FGTS
 
@@ -208,6 +215,7 @@ Critério de sucesso:
 
 - tela de ocorrências atualizada
 - sucesso visual
+- faixa verde de sucesso
 
 ### Fase E. Regeneração de Contribuição Social
 
@@ -225,6 +233,7 @@ Critério de sucesso:
 
 - mensagem de sucesso
 - retorno sem erro para a tela de ocorrências
+- faixa verde de sucesso
 
 ### Fase F. Preenchimento do Histórico Salarial
 
@@ -246,6 +255,8 @@ Critério de sucesso:
 Observação:
 
 - Para automação robusta, o preenchimento deve ser por mapeamento `Competencia -> input da linha`, não por posição visual fixa.
+- No histórico salarial, a competência da grade permanece a do modelo; apenas os valores são preenchidos.
+- Competências existentes na grade e ausentes na planilha devem receber `0,00`.
 
 ### Fase G. Liquidação
 
@@ -257,6 +268,13 @@ Critério de sucesso:
 
 - mensagem de sucesso
 - nenhuma pendência crítica em tela
+- faixa verde de sucesso
+
+Erros reais mapeados no vídeo:
+
+- se o `FGTS` não for regerado corretamente após a mudança de data, a liquidação acusa pendência e exige regerar as ocorrências do FGTS.
+- se a `Contribuição Social` não for regerada corretamente após a mudança de data, a liquidação acusa pendência e exige regerar as ocorrências da Contribuição Social.
+- `Erro Interno no Servidor` deve ser tratado como instabilidade transitória, com nova tentativa controlada do fluxo.
 
 ### Fase H. Impressão
 

@@ -46,6 +46,12 @@
         "value": "formulario:reclamanteNumeroDocumentoFiscal"
       }
     ],
+    "calculo.cpf_tipo_cpf": [
+      {
+        "by": "id",
+        "value": "formulario:documentoFiscalReclamante:0"
+      }
+    ],
     "calculo.tab_parametros": [
       {
         "by": "id",
@@ -62,6 +68,12 @@
         "value": "formulario:dataTerminoCalculoInputDate"
       }
     ],
+    "calculo.data_demissao": [
+      {
+        "by": "id",
+        "value": "formulario:dataDemissaoInputDate"
+      }
+    ],
     "calculo.salvar": [
       {
         "by": "id",
@@ -74,35 +86,92 @@
         "value": "formulario:j_id38:0:j_id41:10:j_id46"
       }
     ],
-    "verbas.regerar": [],
+    "verbas.regerar": [
+      {
+        "by": "id",
+        "value": "formulario:regerarOcorrencias"
+      }
+    ],
+    "verbas.manter_alteracoes": [
+      {
+        "by": "id",
+        "value": "formulario:tipoRegeracao:0"
+      }
+    ],
+    "verbas.confirmar": [
+      {
+        "by": "id",
+        "value": "formulario:confirmarGeracao"
+      },
+      {
+        "by": "xpath",
+        "value": "//input[@type='button' and (@value='OK' or @value='Ok')]"
+      },
+      {
+        "by": "xpath",
+        "value": "//button[normalize-space(.)='OK' or normalize-space(.)='Ok']"
+      }
+    ],
     "menu.fgts": [
       {
         "by": "id",
         "value": "formulario:j_id38:0:j_id41:14:j_id46"
       }
     ],
-    "fgts.salvar": [
+    "fgts.ocorrencias": [
       {
         "by": "id",
-        "value": "formulario:salvar"
+        "value": "formulario:ocorrencias"
       }
     ],
-    "fgts.regerar": [],
-    "fgts.confirmar": [],
+    "fgts.regerar": [
+      {
+        "by": "id",
+        "value": "formulario:regerar"
+      }
+    ],
+    "fgts.manter_alteracoes": [
+      {
+        "by": "id",
+        "value": "formulario:tipoRegeracao:0"
+      }
+    ],
+    "fgts.confirmar": [
+      {
+        "by": "id",
+        "value": "formulario:confirmarGeracao"
+      }
+    ],
     "menu.contribuicao_social": [
       {
         "by": "id",
         "value": "formulario:j_id38:0:j_id41:15:j_id46"
       }
     ],
-    "contribuicao.salvar": [
+    "contribuicao.ocorrencias": [
       {
         "by": "id",
-        "value": "formulario:salvar"
+        "value": "formulario:ocorrencias"
       }
     ],
-    "contribuicao.regerar": [],
-    "contribuicao.confirmar": [],
+    "contribuicao.regerar": [
+      {
+        "by": "id",
+        "value": "formulario:regerar"
+      }
+    ],
+    "contribuicao.manter_alteracoes": [
+      {
+        "by": "id",
+        "value": "formulario:tipoRegeracao:0"
+      }
+    ],
+    "contribuicao.confirmar": [
+      {
+        "by": "id",
+        "value": "formulario:confirmarGeracao"
+      }
+    ],
     "menu.historico_salarial": [
       {
         "by": "id",
@@ -115,9 +184,42 @@
         "value": "formulario:listagem:0:alterarHistorico"
       }
     ],
-    "historico.competencia": [],
-    "historico.valor_input": [],
-    "historico.salvar": [],
+    "historico.nome": [
+      {
+        "by": "id",
+        "value": "formulario:nome"
+      }
+    ],
+    "historico.competencia_inicial": [
+      {
+        "by": "id",
+        "value": "formulario:competenciaInicialInputDate"
+      }
+    ],
+    "historico.competencia_final": [
+      {
+        "by": "id",
+        "value": "formulario:competenciaFinalInputDate"
+      }
+    ],
+    "historico.tipo_valor_informado": [
+      {
+        "by": "id",
+        "value": "formulario:tipoValor:0"
+      }
+    ],
+    "historico.gerar_ocorrencias": [
+      {
+        "by": "id",
+        "value": "formulario:cmdGerarOcorrencias"
+      }
+    ],
+    "historico.salvar": [
+      {
+        "by": "id",
+        "value": "formulario:salvar"
+      }
+    ],
     "menu.liquidar": [
       {
         "by": "id",

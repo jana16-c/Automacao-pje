@@ -1,0 +1,38 @@
+{
+  "pje_calc": {
+    "base_url": "http://localhost:9257/pjecalc",
+    "startup_timeout_seconds": 120,
+    "element_timeout_seconds": 30,
+    "operation_timeout_seconds": 180,
+    "optional_executable_path": null
+  },
+  "browser": {
+    "name": "chrome",
+    "headless": false,
+    "firefox_binary": "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+    "chrome_binary": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "geckodriver_path": null
+  },
+  "execution": {
+    "test_mode_first_record_only": true,
+    "max_retries_per_step": 1,
+    "step_delay_ms": 120,
+    "retry_backoff_seconds": 4,
+    "continue_on_record_error": false,
+    "resume_previous_run": true,
+    "overwrite_valid_outputs": false
+  },
+  "output": {
+    "mask_cpf_in_logs": true,
+    "take_screenshot_on_error": true,
+    "save_html_on_error": true
+  },
+  "history_paste": {
+    "strategy": "selenium_execute_async_script",
+    "delay_ms": 40,
+    "dispatch_input": true,
+    "dispatch_change": true,
+    "dispatch_blur": true,
+    "validate_first_last_and_count": true
+  }
+}

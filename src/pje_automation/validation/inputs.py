@@ -8,7 +8,7 @@ from pje_automation.domain.errors import InputValidationError
 from pje_automation.domain.models import AppPaths, ModelResolution
 
 
-def validate_app_paths(model_file: Path, excel_file: Path, output_dir: Path) -> AppPaths:
+def validate_app_paths(model_file: Path, excel_file: Path, output_dir: Path, history_file: Path | None = None) -> AppPaths:
     if not model_file.exists():
         raise InputValidationError("MODEL_INVALID", "Arquivo modelo nao encontrado")
     if model_file.suffix.lower() not in {".pjc", ".zip"}:
@@ -17,8 +17,13 @@ def validate_app_paths(model_file: Path, excel_file: Path, output_dir: Path) -> 
         raise InputValidationError("EXCEL_MAPPING_ERROR", "Planilha nao encontrada")
     if excel_file.suffix.lower() not in {".xlsx", ".xlsm"}:
         raise InputValidationError("EXCEL_MAPPING_ERROR", "Planilha deve ser .xlsx ou .xlsm")
+    if history_file is not None:
+        if not history_file.exists():
+            raise InputValidationError("EXCEL_MAPPING_ERROR", "Planilha de historico nao encontrada")
+        if history_file.suffix.lower() not in {".xlsx", ".xlsm"}:
+            raise InputValidationError("EXCEL_MAPPING_ERROR", "Planilha de historico deve ser .xlsx ou .xlsm")
     output_dir.mkdir(parents=True, exist_ok=True)
-    return AppPaths(model_file=model_file, excel_file=excel_file, output_dir=output_dir)
+    return AppPaths(model_file=model_file, excel_file=excel_file, history_file=history_file, output_dir=output_dir)
 
 
 def resolve_model_file(path: Path) -> ModelResolution:
