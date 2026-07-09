@@ -14,7 +14,7 @@
     "geckodriver_path": null
   },
   "execution": {
-    "test_mode_first_record_only": true,
+    "test_mode_first_record_only": false,
     "max_retries_per_step": 1,
     "step_delay_ms": 120,
     "retry_backoff_seconds": 4,

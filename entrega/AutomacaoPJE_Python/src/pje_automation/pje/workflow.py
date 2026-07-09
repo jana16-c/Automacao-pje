@@ -6,8 +6,10 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import monotonic
 from time import sleep
 
+from selenium.common.exceptions import NoAlertPresentException
 from selenium.webdriver.common.by import By
 
 from pje_automation.diagnostics.evidence import save_evidence
@@ -329,7 +331,9 @@ class Workflow:
             return
 
     def _wait_for_idle(self, driver) -> None:
+        self._accept_pending_alert(driver, timeout=1.5)
         wait_for_page_ready(driver, timeout=self._element_timeout_seconds())
+        self._accept_pending_alert(driver, timeout=0.5)
         self._raise_if_known_business_error(driver)
         self._raise_if_server_error(driver)
         self._pace()
@@ -398,8 +402,11 @@ class Workflow:
         self.repository.upsert(record, JobState.VALIDANDO_SAIDAS)
 
     def _confirm_regeneration(self, driver, selector_prefix: str) -> None:
+        self._accept_pending_alert(driver, timeout=1.5)
         self._click_if_present(driver, f"{selector_prefix}.manter_alteracoes", timeout=5)
+        self._accept_pending_alert(driver, timeout=1.5)
         self._click_if_present(driver, f"{selector_prefix}.confirmar", timeout=5)
+        self._accept_pending_alert(driver, timeout=2)
         self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
 
     def _run_liquidation(self, driver) -> None:
@@ -713,6 +720,22 @@ class Workflow:
         except Exception:
             return False
         return False
+
+    def _accept_pending_alert(self, driver, timeout: float = 1.0) -> bool:
+        deadline = monotonic() + max(timeout, 0)
+        while True:
+            try:
+                alert = driver.switch_to.alert
+                _ = alert.text
+                alert.accept()
+                self._pace()
+                return True
+            except NoAlertPresentException:
+                if monotonic() >= deadline:
+                    return False
+                sleep(0.1)
+            except Exception:
+                return False
 
     def _page_text(self, driver) -> str:
         return str(

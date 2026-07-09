@@ -207,3 +207,27 @@ def test_ensure_cpf_selected_clicks_even_when_radio_is_already_selected() -> Non
         original.wait_for_present_element = saved_present
 
     assert len(calls) == 1
+
+
+def test_accept_pending_alert_confirms_native_dialog() -> None:
+    workflow = build_workflow()
+    workflow._pace = lambda: None
+
+    accepted = []
+
+    class AlertStub:
+        text = "Confirmar"
+
+        def accept(self):
+            accepted.append(True)
+
+    class SwitchToStub:
+        @property
+        def alert(self):
+            return AlertStub()
+
+    class DriverStub:
+        switch_to = SwitchToStub()
+
+    assert workflow._accept_pending_alert(DriverStub(), timeout=0) is True
+    assert accepted == [True]

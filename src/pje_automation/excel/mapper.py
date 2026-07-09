@@ -52,7 +52,7 @@ class HistoryIndex:
     by_nome: dict[str, dict[str, HistoricalSeries]]
 
 
-def build_preview(workbook: Workbook, history_workbook: Workbook | None = None, limit: int = 20) -> WorkbookPreview:
+def build_preview(workbook: Workbook, history_workbook: Workbook | None = None, limit: int | None = 20) -> WorkbookPreview:
     valid_records: list[Record] = []
     invalid_rows: list[str] = []
     ambiguous_rows: list[str] = []
@@ -102,9 +102,9 @@ def build_preview(workbook: Workbook, history_workbook: Workbook | None = None, 
                     source=RecordSource(sheet=worksheet.title, row=row_index),
                 )
             )
-            if len(valid_records) >= limit:
+            if limit is not None and len(valid_records) >= limit:
                 break
-        if len(valid_records) >= limit:
+        if limit is not None and len(valid_records) >= limit:
             break
 
     if not valid_records:
