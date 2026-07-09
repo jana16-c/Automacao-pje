@@ -224,6 +224,10 @@
       {
         "by": "id",
         "value": "formulario:j_id38:2:j_id41:0:j_id46"
+      },
+      {
+        "by": "xpath",
+        "value": "//li[@id='li_operacoes_liquidar']//a[contains(normalize-space(.), 'Liquidar')]"
       }
     ],
     "liquidar.executar": [
@@ -236,6 +240,10 @@
       {
         "by": "id",
         "value": "formulario:j_id38:2:j_id41:1:j_id46"
+      },
+      {
+        "by": "xpath",
+        "value": "//li[@id='li_calculo_relatorios']//a[contains(normalize-space(.), 'Imprimir')]"
       }
     ],
     "imprimir.executar": [
@@ -248,6 +256,10 @@
       {
         "by": "id",
         "value": "formulario:j_id38:2:j_id41:4:j_id46"
+      },
+      {
+        "by": "xpath",
+        "value": "//li[@id='li_operacoes_exportar']//a[contains(normalize-space(.), 'Exportar')]"
       }
     ],
     "exportar.executar": [

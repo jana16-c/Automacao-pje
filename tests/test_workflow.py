@@ -72,6 +72,38 @@ def test_sync_calendar_hidden_value_updates_current_month_year() -> None:
     assert calls == [("formulario:dataDemissaoInputCurrentDate", "03/2016")]
 
 
+def test_set_field_value_uses_masked_setter_for_document_field() -> None:
+    workflow = build_workflow()
+    workflow._pace = lambda: None
+
+    class FieldStub:
+        def get_attribute(self, name):
+            values = {
+                "id": "formulario:reclamanteNumeroDocumentoFiscal",
+                "disabled": None,
+                "readonly": None,
+            }
+            return values.get(name)
+
+    calls = []
+
+    class DriverStub:
+        def execute_script(self, script, *args):
+            calls.append((script, args))
+
+    workflow._set_field_value(DriverStub(), FieldStub(), "27989279436")
+
+    assert len(calls) == 1
+    assert calls[0][1][1] == "279.892.794-36"
+
+
+def test_idle_alert_timeout_seconds_reads_execution_config() -> None:
+    workflow = build_workflow()
+    workflow.browser_manager.config["execution"] = {"idle_alert_timeout_seconds": 0.15}
+
+    assert workflow._idle_alert_timeout_seconds() == 0.15
+
+
 def test_wait_for_field_value_accepts_matching_value() -> None:
     workflow = build_workflow()
     workflow.selectors = type(

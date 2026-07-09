@@ -188,6 +188,12 @@ class Workflow:
             self._sync_calendar_hidden_value(driver, field, effective_value)
             return
 
+        if masked_value:
+            self._set_masked_input_value(driver, field, effective_value)
+            self._sync_calendar_hidden_value(driver, field, effective_value)
+            self._pace()
+            return
+
         disabled = field.get_attribute("disabled")
         readonly = field.get_attribute("readonly")
         if disabled or readonly or not field.is_enabled():
@@ -226,6 +232,31 @@ class Workflow:
             )
             self._sync_calendar_hidden_value(driver, field, effective_value)
             self._pace()
+
+    def _set_masked_input_value(self, driver, field, value: str) -> None:
+        driver.execute_script(
+            """
+            const input = arguments[0];
+            const nextValue = arguments[1];
+            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+            if (!input || !nativeSetter) {
+              return;
+            }
+            input.removeAttribute('disabled');
+            input.removeAttribute('readonly');
+            input.focus();
+            nativeSetter.call(input, '');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            nativeSetter.call(input, nextValue);
+            input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Tab' }));
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Tab' }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.dispatchEvent(new Event('blur', { bubbles: true }));
+            """,
+            field,
+            value,
+        )
 
     def _fill_document_field_with_retry(self, driver, selector_key: str, value: str, attempts: int = 3) -> None:
         last_error: Exception | None = None
@@ -374,10 +405,10 @@ class Workflow:
 
     def _wait_for_idle(self, driver) -> None:
         self._ensure_not_cancelled()
-        self._accept_pending_alert(driver, timeout=1.5)
+        self._accept_pending_alert(driver, timeout=self._idle_alert_timeout_seconds())
         wait_for_page_ready(driver, timeout=self._element_timeout_seconds())
         self._ensure_not_cancelled()
-        self._accept_pending_alert(driver, timeout=0.5)
+        self._accept_pending_alert(driver, timeout=self._idle_alert_timeout_seconds())
         self._raise_if_known_business_error(driver)
         self._raise_if_server_error(driver)
         self._pace()
@@ -961,6 +992,9 @@ class Workflow:
 
     def _history_validation_enabled(self) -> bool:
         return bool(self.browser_manager.config.get("history_paste", {}).get("validate_first_last_and_count", True))
+
+    def _idle_alert_timeout_seconds(self) -> float:
+        return float(self.browser_manager.config.get("execution", {}).get("idle_alert_timeout_seconds", 0.15))
 
     def _pace(self) -> None:
         self._ensure_not_cancelled()

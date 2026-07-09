@@ -4,15 +4,28 @@ $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$releaseRoot = Join-Path $projectRoot "entrega\AutomacaoPJE_Python"
+$releaseRoot = Join-Path $projectRoot "entrega\AutomacaoPJE_Python_rapido"
 
-if (Test-Path $releaseRoot) {
-    Remove-Item -Recurse -Force $releaseRoot
+if (-not (Test-Path $releaseRoot)) {
+    New-Item -ItemType Directory -Path $releaseRoot | Out-Null
 }
 
-New-Item -ItemType Directory -Path $releaseRoot | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $releaseRoot "src") | Out-Null
+foreach ($managedPath in @(
+    "src\pje_automation",
+    "resources",
+    "AutomacaoPJE.py",
+    "AutomacaoPJE.pyw",
+    "requirements.txt",
+    "Iniciar_AutomacaoPJE.bat",
+    "README.md"
+)) {
+    $target = Join-Path $releaseRoot $managedPath
+    if (Test-Path $target) {
+        Remove-Item -Recurse -Force $target
+    }
+}
 
+New-Item -ItemType Directory -Path (Join-Path $releaseRoot "src") -Force | Out-Null
 Copy-Item -Recurse -Force (Join-Path $projectRoot "src\pje_automation") (Join-Path $releaseRoot "src\pje_automation")
 Copy-Item -Recurse -Force (Join-Path $projectRoot "resources") (Join-Path $releaseRoot "resources")
 Get-ChildItem -Path $releaseRoot -Directory -Recurse -Filter "__pycache__" | Remove-Item -Recurse -Force
