@@ -3,7 +3,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .app import Application
+try:
+    from .app import Application
+except ImportError:
+    from pje_automation.app import Application
 
 
 def build_parser() -> argparse.ArgumentParser:

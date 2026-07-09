@@ -10,7 +10,7 @@ resource_files = [
 ]
 
 a = Analysis(
-    ["src/pje_automation/__main__.py"],
+    ["run.py"],
     pathex=[str(project_root / "src")],
     binaries=[],
     datas=resource_files,
@@ -36,7 +36,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
