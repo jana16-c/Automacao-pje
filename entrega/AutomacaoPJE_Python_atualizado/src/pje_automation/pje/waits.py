@@ -9,6 +9,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 WAIT_POLL_FREQUENCY = 0.1
+DOWNLOAD_POLL_SECONDS = 0.2
+DOWNLOAD_STABLE_SECONDS = 1.0
+DOWNLOAD_STABLE_POLL_SECONDS = 0.2
 
 
 def wait_for_element(driver: WebDriver, locator: tuple[str, str], timeout: int = 30) -> WebElement:
@@ -48,11 +51,11 @@ def wait_for_download(directory: Path, suffix: str, timeout: int = 180) -> Path:
         for item in directory.iterdir():
             if item.suffix.lower() == suffix.lower() and item.stat().st_size > 0:
                 return wait_for_file_stable(item)
-        sleep(1)
+        sleep(DOWNLOAD_POLL_SECONDS)
     raise TimeoutError(f"Download {suffix} nao apareceu em {directory}")
 
 
-def wait_for_file_stable(path: Path, stable_seconds: int = 2, timeout: int = 30) -> Path:
+def wait_for_file_stable(path: Path, stable_seconds: float = DOWNLOAD_STABLE_SECONDS, timeout: int = 30) -> Path:
     end = monotonic() + timeout
     previous_size = -1
     stable_since = None
@@ -65,5 +68,5 @@ def wait_for_file_stable(path: Path, stable_seconds: int = 2, timeout: int = 30)
         else:
             stable_since = None
             previous_size = size
-        sleep(0.5)
+        sleep(DOWNLOAD_STABLE_POLL_SECONDS)
     raise TimeoutError(f"Arquivo nao estabilizou: {path}")

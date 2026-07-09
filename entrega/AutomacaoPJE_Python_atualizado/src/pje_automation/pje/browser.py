@@ -90,19 +90,43 @@ class BrowserManager:
         if binary:
             options.binary_location = binary
 
-        if download_dir:
-            prefs = {
-                "download.default_directory": str(download_dir),
-                "download.prompt_for_download": False,
-                "plugins.always_open_pdf_externally": True,
-            }
+        prefs = self._build_chrome_prefs(download_dir)
+        if prefs:
             options.add_experimental_option("prefs", prefs)
 
         driver = webdriver.Chrome(service=ChromeService(), options=options)
+        self._configure_chrome_download_behavior(driver, download_dir)
         driver.set_page_load_timeout(int(self.config["pje_calc"].get("operation_timeout_seconds", 180)))
         driver.set_script_timeout(int(self.config["pje_calc"].get("operation_timeout_seconds", 180)))
         driver.implicitly_wait(0)
         return driver
+
+    def _build_chrome_prefs(self, download_dir: Path | None) -> dict[str, Any]:
+        if not download_dir:
+            return {}
+        return {
+            "download.default_directory": str(download_dir),
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True,
+            "profile.default_content_setting_values.automatic_downloads": 1,
+            "profile.default_content_settings.popups": 0,
+            "plugins.always_open_pdf_externally": True,
+            "safebrowsing.enabled": True,
+        }
+
+    def _configure_chrome_download_behavior(self, driver: WebDriver, download_dir: Path | None) -> None:
+        if not download_dir or not hasattr(driver, "execute_cdp_cmd"):
+            return
+        params = {
+            "behavior": "allow",
+            "downloadPath": str(download_dir),
+            "eventsEnabled": False,
+        }
+        for command in ("Browser.setDownloadBehavior", "Page.setDownloadBehavior"):
+            try:
+                driver.execute_cdp_cmd(command, params)
+            except Exception:
+                continue
 
     def open_base_page(self, driver: WebDriver) -> None:
         driver.get(self.base_url)
