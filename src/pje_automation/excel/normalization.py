@@ -82,8 +82,43 @@ def parse_decimal(value: object) -> Decimal:
         return Decimal(value).quantize(Decimal("0.01"))
     if isinstance(value, float):
         return Decimal(str(value)).quantize(Decimal("0.01"))
-    text = str(value).strip().replace(".", "").replace(",", ".")
+    text = normalize_decimal_text(str(value).strip())
     try:
         return Decimal(text).quantize(Decimal("0.01"))
     except InvalidOperation as exc:
         raise ValueError(f"Valor monetario invalido: {value!r}") from exc
+
+
+def normalize_decimal_text(text: str) -> str:
+    compact = text.replace(" ", "")
+    if not compact:
+        return compact
+
+    has_dot = "." in compact
+    has_comma = "," in compact
+    if has_dot and has_comma:
+        last_dot = compact.rfind(".")
+        last_comma = compact.rfind(",")
+        if last_dot > last_comma:
+            return compact.replace(",", "")
+        return compact.replace(".", "").replace(",", ".")
+
+    if has_comma:
+        return normalize_single_separator_decimal(compact, ",")
+    if has_dot:
+        return normalize_single_separator_decimal(compact, ".")
+    return compact
+
+
+def normalize_single_separator_decimal(text: str, separator: str) -> str:
+    if text.count(separator) == 1:
+        left, right = text.split(separator)
+        if 1 <= len(right) <= 3:
+            return f"{left}.{right}"
+        return text.replace(separator, "")
+
+    parts = text.split(separator)
+    last = parts[-1]
+    if 1 <= len(last) <= 3:
+        return f"{''.join(parts[:-1])}.{last}"
+    return "".join(parts)

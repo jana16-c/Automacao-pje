@@ -40,7 +40,7 @@ class Application:
         workbook = open_workbook(paths.excel_file)
         history_workbook = open_workbook(paths.history_file) if paths.history_file else None
         try:
-            preview = build_preview(workbook, history_workbook=history_workbook)
+            preview = build_preview(workbook, history_workbook=history_workbook, limit=None)
             preview.valid_records = self._select_records_for_execution(
                 preview,
                 history_file_provided=history_workbook is not None,

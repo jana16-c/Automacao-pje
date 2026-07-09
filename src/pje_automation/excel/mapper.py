@@ -52,6 +52,13 @@ class HistoryIndex:
     by_nome: dict[str, dict[str, HistoricalSeries]]
 
 
+@dataclass(slots=True)
+class ValueColumnProfile:
+    numeric_count: int = 0
+    one_decimal_count: int = 0
+    two_plus_decimal_count: int = 0
+
+
 def build_preview(workbook: Workbook, history_workbook: Workbook | None = None, limit: int | None = 20) -> WorkbookPreview:
     valid_records: list[Record] = []
     invalid_rows: list[str] = []
@@ -212,6 +219,8 @@ def collect_companion_history_series(workbook: Workbook, history_index: HistoryI
         if not value_columns:
             continue
 
+        profiles = build_value_column_profiles(worksheet, mapping.header_row, value_columns)
+
         for row_index, row in enumerate(
             worksheet.iter_rows(min_row=mapping.header_row + 1, values_only=True),
             start=mapping.header_row + 1,
@@ -232,7 +241,7 @@ def collect_companion_history_series(workbook: Workbook, history_index: HistoryI
 
                 historico_nome = clean_history_label(header[column_index])
                 try:
-                    valor = parse_decimal(raw_valor)
+                    valor = parse_history_value(raw_valor, profiles.get(column_index))
                 except ValueError:
                     invalid_rows.append(f"{worksheet.title}:{row_index}")
                     continue
@@ -302,6 +311,59 @@ def add_history_value(
     normalized_name = normalize_name_key(historico_nome)
     series = series_by_name.setdefault(normalized_name, HistoricalSeries(nome=historico_nome.strip(), valores=[]))
     series.valores.append(HistoricalValue(competencia=competencia, valor=valor))
+
+
+def build_value_column_profiles(worksheet, header_row: int, value_columns: list[int]) -> dict[int, ValueColumnProfile]:
+    profiles = {column_index: ValueColumnProfile() for column_index in value_columns}
+    for row in worksheet.iter_rows(min_row=header_row + 1, values_only=True):
+        for column_index in value_columns:
+            raw_value = cell_value(row, column_index)
+            if not has_meaningful_history_value(raw_value):
+                continue
+            decimal_places = decimal_places_count(raw_value)
+            if decimal_places is None:
+                continue
+            profile = profiles[column_index]
+            profile.numeric_count += 1
+            if decimal_places == 1:
+                profile.one_decimal_count += 1
+            elif decimal_places >= 2:
+                profile.two_plus_decimal_count += 1
+    return profiles
+
+
+def parse_history_value(raw_value: object, profile: ValueColumnProfile | None) -> Decimal:
+    value = parse_decimal(raw_value)
+    if profile and should_shift_sparse_single_decimal(raw_value, profile):
+        return (value / Decimal("10")).quantize(Decimal("0.01"))
+    return value
+
+
+def should_shift_sparse_single_decimal(raw_value: object, profile: ValueColumnProfile) -> bool:
+    if profile.one_decimal_count <= 0 or profile.two_plus_decimal_count <= 0:
+        return False
+    if profile.one_decimal_count > max(3, profile.numeric_count // 5):
+        return False
+    if decimal_places_count(raw_value) != 1:
+        return False
+    try:
+        return Decimal(str(raw_value)).copy_abs() < Decimal("10")
+    except Exception:
+        return False
+
+
+def decimal_places_count(value: object) -> int | None:
+    if isinstance(value, int):
+        return 0
+    if isinstance(value, float):
+        text = format(value, ".15g")
+    elif isinstance(value, Decimal):
+        text = format(value.normalize(), "f")
+    else:
+        text = str(value).strip()
+    if not text or "." not in text:
+        return 0 if text else None
+    return len(text.split(".", 1)[1].rstrip("0"))
 
 
 def clean_history_label(value: object) -> str:

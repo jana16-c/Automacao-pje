@@ -403,10 +403,13 @@ class Workflow:
 
     def _confirm_regeneration(self, driver, selector_prefix: str) -> None:
         self._accept_pending_alert(driver, timeout=1.5)
+        self._click_visible_confirmation_ok(driver)
         self._click_if_present(driver, f"{selector_prefix}.manter_alteracoes", timeout=5)
         self._accept_pending_alert(driver, timeout=1.5)
+        self._click_visible_confirmation_ok(driver)
         self._click_if_present(driver, f"{selector_prefix}.confirmar", timeout=5)
         self._accept_pending_alert(driver, timeout=2)
+        self._click_visible_confirmation_ok(driver)
         self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
 
     def _run_liquidation(self, driver) -> None:
@@ -668,6 +671,9 @@ class Workflow:
     def _wait_for_success_feedback(self, driver, timeout: int) -> None:
         def _success_visible(current_driver) -> bool:
             try:
+                if self._click_visible_confirmation_ok(current_driver):
+                    return False
+                self._accept_pending_alert(current_driver, timeout=0)
                 self._raise_if_known_business_error(current_driver)
                 self._raise_if_server_error(current_driver)
                 return bool(
@@ -720,6 +726,50 @@ class Workflow:
         except Exception:
             return False
         return False
+
+    def _click_visible_confirmation_ok(self, driver) -> bool:
+        try:
+            clicked = bool(
+                driver.execute_script(
+                    """
+                    const isVisible = (element) => {
+                      if (!element) {
+                        return false;
+                      }
+                      const style = window.getComputedStyle(element);
+                      const rect = element.getBoundingClientRect();
+                      return style.display !== 'none'
+                        && style.visibility !== 'hidden'
+                        && rect.width > 0
+                        && rect.height > 0;
+                    };
+
+                    const textMatches = (element) => {
+                      const text = (element.value || element.innerText || element.textContent || '').trim();
+                      return ['OK', 'Ok', 'ok'].includes(text);
+                    };
+
+                    const candidates = Array.from(
+                      document.querySelectorAll("a, button, input[type='button'], input[type='submit'], span")
+                    );
+
+                    for (const candidate of candidates) {
+                      if (!textMatches(candidate) || !isVisible(candidate)) {
+                        continue;
+                      }
+                      const clickable = candidate.closest("a,button,input,[role='button'],td,span") || candidate;
+                      clickable.click();
+                      return true;
+                    }
+                    return false;
+                    """
+                )
+            )
+        except Exception:
+            return False
+        if clicked:
+            self._pace()
+        return clicked
 
     def _accept_pending_alert(self, driver, timeout: float = 1.0) -> bool:
         deadline = monotonic() + max(timeout, 0)

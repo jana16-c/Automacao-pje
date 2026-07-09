@@ -36,3 +36,15 @@ def test_normalize_registration_removes_decimal_noise() -> None:
 
 def test_parse_decimal_preserves_excel_numeric_cells() -> None:
     assert parse_decimal(18.54) == Decimal("18.54")
+
+
+def test_parse_decimal_normalizes_integer_text_to_two_decimals() -> None:
+    assert parse_decimal("2") == Decimal("2.00")
+
+
+def test_parse_decimal_normalizes_three_decimal_comma_text() -> None:
+    assert parse_decimal("2,120") == Decimal("2.12")
+
+
+def test_parse_decimal_normalizes_dot_decimal_text() -> None:
+    assert parse_decimal("2.13") == Decimal("2.13")

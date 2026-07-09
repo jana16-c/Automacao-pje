@@ -231,3 +231,16 @@ def test_accept_pending_alert_confirms_native_dialog() -> None:
 
     assert workflow._accept_pending_alert(DriverStub(), timeout=0) is True
     assert accepted == [True]
+
+
+def test_click_visible_confirmation_ok_clicks_html_modal_button() -> None:
+    workflow = build_workflow()
+    paced = []
+    workflow._pace = lambda: paced.append(True)
+
+    class DriverStub:
+        def execute_script(self, script):
+            return True
+
+    assert workflow._click_visible_confirmation_ok(DriverStub()) is True
+    assert paced == [True]
