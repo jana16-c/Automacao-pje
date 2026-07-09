@@ -16,7 +16,7 @@
   "execution": {
     "test_mode_first_record_only": false,
     "max_retries_per_step": 1,
-    "step_delay_ms": 40,
+    "step_delay_ms": 0,
     "retry_backoff_seconds": 2,
     "continue_on_record_error": false,
     "resume_previous_run": true,
@@ -29,7 +29,7 @@
   },
   "history_paste": {
     "strategy": "selenium_execute_async_script",
-    "delay_ms": 12,
+    "delay_ms": 0,
     "dispatch_input": true,
     "dispatch_change": true,
     "dispatch_blur": true,

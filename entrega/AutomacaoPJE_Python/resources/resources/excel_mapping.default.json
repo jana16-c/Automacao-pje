@@ -1,0 +1,13 @@
+{
+  "version": "0.1.0",
+  "required_logical_fields": [
+    "nome",
+    "cpf",
+    "data_demissao"
+  ],
+  "join_strategy": [
+    "prefer unique id",
+    "then normalized cpf",
+    "then normalized name with ambiguity detection"
+  ]
+}

@@ -1,4 +1,4 @@
-from pje_automation.domain.errors import WorkflowExecutionError
+from pje_automation.domain.errors import AutomationCancelledError, WorkflowExecutionError
 from pje_automation.pje.workflow import Workflow
 
 
@@ -244,3 +244,15 @@ def test_click_visible_confirmation_ok_clicks_html_modal_button() -> None:
 
     assert workflow._click_visible_confirmation_ok(DriverStub()) is True
     assert paced == [True]
+
+
+def test_workflow_ensure_not_cancelled_raises_when_requested() -> None:
+    workflow = build_workflow()
+    workflow.should_cancel = lambda: True
+
+    try:
+        workflow._ensure_not_cancelled()
+    except AutomationCancelledError as exc:
+        assert exc.code == "AUTOMATION_CANCELLED"
+    else:
+        raise AssertionError("Era esperado erro de cancelamento.")

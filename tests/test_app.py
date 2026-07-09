@@ -1,6 +1,8 @@
+from threading import Event
+
 from pje_automation.app import Application
+from pje_automation.domain.errors import AutomationCancelledError, WorkflowExecutionError
 from pje_automation.domain.models import HistoricalSeries, HistoricalValue, Record, RecordSource, WorkbookPreview
-from pje_automation.domain.errors import WorkflowExecutionError
 
 
 def build_application() -> Application:
@@ -17,6 +19,8 @@ def build_application() -> Application:
             }
         },
     )()
+    app._cancel_event = Event()
+    app._active_driver = None
     return app
 
 
@@ -103,3 +107,23 @@ def test_select_records_for_execution_honors_test_mode_limit() -> None:
     selected = app._select_records_for_execution(preview, history_file_provided=True, apply_test_mode_limit=True)
 
     assert [record.record_id for record in selected] == ["1"]
+
+
+def test_request_stop_marks_application_as_cancelled() -> None:
+    app = build_application()
+
+    app.request_stop()
+
+    assert app.is_stop_requested() is True
+
+
+def test_ensure_not_cancelled_raises_after_stop_request() -> None:
+    app = build_application()
+    app.request_stop()
+
+    try:
+        app._ensure_not_cancelled()
+    except AutomationCancelledError as exc:
+        assert exc.code == "AUTOMATION_CANCELLED"
+    else:
+        raise AssertionError("Era esperado erro de cancelamento.")

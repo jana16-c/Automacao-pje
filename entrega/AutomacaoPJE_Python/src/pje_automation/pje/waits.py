@@ -8,17 +8,19 @@ from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+WAIT_POLL_FREQUENCY = 0.1
+
 
 def wait_for_element(driver: WebDriver, locator: tuple[str, str], timeout: int = 30) -> WebElement:
-    return WebDriverWait(driver, timeout).until(EC.visibility_of_element_located(locator))
+    return WebDriverWait(driver, timeout, poll_frequency=WAIT_POLL_FREQUENCY).until(EC.visibility_of_element_located(locator))
 
 
 def wait_for_present_element(driver: WebDriver, locator: tuple[str, str], timeout: int = 30) -> WebElement:
-    return WebDriverWait(driver, timeout).until(EC.presence_of_element_located(locator))
+    return WebDriverWait(driver, timeout, poll_frequency=WAIT_POLL_FREQUENCY).until(EC.presence_of_element_located(locator))
 
 
 def wait_for_condition(driver: WebDriver, predicate, timeout: int = 30):
-    return WebDriverWait(driver, timeout).until(predicate)
+    return WebDriverWait(driver, timeout, poll_frequency=WAIT_POLL_FREQUENCY).until(predicate)
 
 
 def wait_for_page_ready(driver: WebDriver, timeout: int = 30) -> None:
@@ -27,7 +29,8 @@ def wait_for_page_ready(driver: WebDriver, timeout: int = 30) -> None:
             return bool(
                 current_driver.execute_script(
                     """
-                    const ready = document.readyState === 'complete';
+                    const readyState = document.readyState;
+                    const ready = readyState === 'complete' || readyState === 'interactive';
                     const jqueryIdle = !window.jQuery || window.jQuery.active === 0;
                     return ready && jqueryIdle;
                     """

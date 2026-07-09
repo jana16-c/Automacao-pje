@@ -75,11 +75,16 @@ class BrowserManager:
 
     def _open_chrome(self, download_dir: Path | None) -> WebDriver:
         options = ChromeOptions()
+        options.page_load_strategy = "eager"
         if self.config["browser"].get("headless"):
             options.add_argument("--headless=new")
         options.add_argument("--disable-gpu")
         options.add_argument("--no-first-run")
         options.add_argument("--no-default-browser-check")
+        options.add_argument("--disable-background-networking")
+        options.add_argument("--disable-renderer-backgrounding")
+        options.add_argument("--disable-background-timer-throttling")
+        options.add_argument("--disable-popup-blocking")
 
         binary = self.config["browser"].get("chrome_binary")
         if binary:
@@ -93,7 +98,11 @@ class BrowserManager:
             }
             options.add_experimental_option("prefs", prefs)
 
-        return webdriver.Chrome(service=ChromeService(), options=options)
+        driver = webdriver.Chrome(service=ChromeService(), options=options)
+        driver.set_page_load_timeout(int(self.config["pje_calc"].get("operation_timeout_seconds", 180)))
+        driver.set_script_timeout(int(self.config["pje_calc"].get("operation_timeout_seconds", 180)))
+        driver.implicitly_wait(0)
+        return driver
 
     def open_base_page(self, driver: WebDriver) -> None:
         driver.get(self.base_url)
