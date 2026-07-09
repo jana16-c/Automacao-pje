@@ -16,6 +16,7 @@
   "execution": {
     "test_mode_first_record_only": false,
     "max_retries_per_step": 1,
+    "output_retry_attempts": 2,
     "step_delay_ms": 0,
     "retry_backoff_seconds": 2,
     "continue_on_record_error": false,

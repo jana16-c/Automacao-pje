@@ -1,4 +1,6 @@
-from pje_automation.domain.errors import AutomationCancelledError, WorkflowExecutionError
+from pathlib import Path
+
+from pje_automation.domain.errors import AutomationCancelledError, OutputValidationError, WorkflowExecutionError
 from pje_automation.pje.workflow import Workflow
 
 
@@ -256,3 +258,56 @@ def test_workflow_ensure_not_cancelled_raises_when_requested() -> None:
         assert exc.code == "AUTOMATION_CANCELLED"
     else:
         raise AssertionError("Era esperado erro de cancelamento.")
+
+
+def test_clear_download_artifacts_removes_partial_and_finished_output(tmp_path) -> None:
+    workflow = build_workflow()
+    pdf_file = tmp_path / "arquivo.pdf"
+    partial_file = tmp_path / "arquivo.pdf.crdownload"
+    other_file = tmp_path / "arquivo.txt"
+    pdf_file.write_bytes(b"%PDF-test")
+    partial_file.write_bytes(b"partial")
+    other_file.write_text("keep")
+
+    workflow._clear_download_artifacts(tmp_path, ".pdf")
+
+    assert not pdf_file.exists()
+    assert not partial_file.exists()
+    assert other_file.exists()
+
+
+def test_collect_download_with_retry_retries_after_validation_error(tmp_path) -> None:
+    workflow = build_workflow()
+    workflow._wait_for_idle = lambda driver: None
+    workflow._ensure_not_cancelled = lambda: None
+
+    attempts = []
+    target = tmp_path / "arquivo.pdf"
+
+    def trigger():
+        attempts.append("trigger")
+        target.write_bytes(b"%PDF-test")
+
+    def collector(download_dir: Path) -> Path:
+        return download_dir / "arquivo.pdf"
+
+    validation_attempts = []
+
+    def validator(path: Path) -> None:
+        validation_attempts.append(path)
+        if len(validation_attempts) == 1:
+            raise OutputValidationError("PDF_INVALID", "falhou")
+
+    result = workflow._collect_download_with_retry(
+        driver=object(),
+        download_dir=tmp_path,
+        suffix=".pdf",
+        output_name="PDF",
+        trigger=trigger,
+        collector=collector,
+        validator=validator,
+    )
+
+    assert result == target
+    assert len(attempts) == 2
+    assert len(validation_attempts) == 2

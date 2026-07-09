@@ -119,8 +119,7 @@ class Workflow:
         self._fill_first_available(driver, "calculo.nome_reclamante", record.nome)
         self._ensure_cpf_selected(driver)
         self._wait_for_field_enabled(driver, "calculo.cpf")
-        self._fill_first_available(driver, "calculo.cpf", record.cpf)
-        self._wait_for_field_match(driver, "calculo.cpf", lambda current: normalize_cpf(current) == normalize_cpf(record.cpf))
+        self._fill_document_field_with_retry(driver, "calculo.cpf", record.cpf)
         self.repository.upsert(record, JobState.SALVANDO_PARAMETROS)
         self._click_required(driver, "calculo.salvar")
         self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
@@ -173,6 +172,8 @@ class Workflow:
 
     def _set_field_value(self, driver, field, value: str) -> None:
         field_id = field.get_attribute("id") or ""
+        masked_value = self._format_masked_document_value(field_id, value)
+        effective_value = masked_value or value
         if field_id.endswith("InputDate"):
             driver.execute_script(
                 """
@@ -182,9 +183,9 @@ class Workflow:
                 arguments[0].dispatchEvent(new Event('blur', { bubbles: true }));
                 """,
                 field,
-                value,
+                effective_value,
             )
-            self._sync_calendar_hidden_value(driver, field, value)
+            self._sync_calendar_hidden_value(driver, field, effective_value)
             return
 
         disabled = field.get_attribute("disabled")
@@ -200,17 +201,17 @@ class Workflow:
                 arguments[0].blur();
                 """,
                 field,
-                value,
+                effective_value,
             )
-            self._sync_calendar_hidden_value(driver, field, value)
+            self._sync_calendar_hidden_value(driver, field, effective_value)
             return
 
         try:
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", field)
             field.click()
             field.clear()
-            field.send_keys(value)
-            self._sync_calendar_hidden_value(driver, field, value)
+            field.send_keys(effective_value)
+            self._sync_calendar_hidden_value(driver, field, effective_value)
             self._pace()
         except Exception:
             driver.execute_script(
@@ -221,10 +222,30 @@ class Workflow:
                 arguments[0].blur();
                 """,
                 field,
-                value,
+                effective_value,
             )
-            self._sync_calendar_hidden_value(driver, field, value)
+            self._sync_calendar_hidden_value(driver, field, effective_value)
             self._pace()
+
+    def _fill_document_field_with_retry(self, driver, selector_key: str, value: str, attempts: int = 3) -> None:
+        last_error: Exception | None = None
+        for _ in range(attempts):
+            try:
+                self._fill_first_available(driver, selector_key, value)
+                self._wait_for_field_match(driver, selector_key, lambda current: normalize_cpf(current) == normalize_cpf(value), timeout=5)
+                return
+            except Exception as exc:
+                last_error = exc
+                self._ensure_cpf_selected(driver)
+                self._wait_for_field_enabled(driver, selector_key, timeout=5)
+        if last_error is not None:
+            raise last_error
+
+    def _format_masked_document_value(self, field_id: str, value: str) -> str | None:
+        digits = normalize_cpf(value)
+        if field_id.endswith("reclamanteNumeroDocumentoFiscal") and len(digits) == 11:
+            return f"{digits[:3]}.{digits[3:6]}.{digits[6:9]}-{digits[9:]}"
+        return None
 
     def _open_parameters_tab(self, driver) -> None:
         switched = False
@@ -409,20 +430,75 @@ class Workflow:
         if not download_dir:
             raise WorkflowExecutionError("DOWNLOAD_CONFIG", "Nao foi possivel determinar o diretorio de download do navegador.")
 
-        self._open_print_page_ready(driver)
-        self._click_required(driver, "imprimir.executar")
-        pdf_path = collect_pdf(download_dir)
-        validate_pdf(pdf_path)
+        pdf_path = self._download_pdf(driver, download_dir)
         shutil.move(str(pdf_path), pdf_dir / f"{safe_name}.pdf")
 
         self.repository.upsert(record, JobState.EXPORTANDO_PJC)
-        self._click_required(driver, "menu.exportar", url_fragment="exportacao.jsf")
-        self._click_required(driver, "exportar.executar")
-        pjc_path = collect_pjc(download_dir)
-        validate_pje_archive(pjc_path)
+        pjc_path = self._download_pjc(driver, download_dir)
         shutil.move(str(pjc_path), pjc_dir / f"{safe_name}.pjc")
 
         self.repository.upsert(record, JobState.VALIDANDO_SAIDAS)
+
+    def _download_pdf(self, driver, download_dir: Path) -> Path:
+        return self._collect_download_with_retry(
+            driver=driver,
+            download_dir=download_dir,
+            suffix=".pdf",
+            output_name="PDF",
+            trigger=lambda: (
+                self._open_print_page_ready(driver),
+                self._click_required(driver, "imprimir.executar"),
+            ),
+            collector=collect_pdf,
+            validator=validate_pdf,
+        )
+
+    def _download_pjc(self, driver, download_dir: Path) -> Path:
+        return self._collect_download_with_retry(
+            driver=driver,
+            download_dir=download_dir,
+            suffix=".pjc",
+            output_name="PJC",
+            trigger=lambda: (
+                self._click_required(driver, "menu.exportar", url_fragment="exportacao.jsf"),
+                self._click_required(driver, "exportar.executar"),
+            ),
+            collector=collect_pjc,
+            validator=validate_pje_archive,
+        )
+
+    def _collect_download_with_retry(self, driver, download_dir: Path, suffix: str, output_name: str, trigger, collector, validator) -> Path:
+        attempts = self._output_retry_attempts()
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            self._ensure_not_cancelled()
+            self._clear_download_artifacts(download_dir, suffix)
+            try:
+                trigger()
+                path = collector(download_dir)
+                validator(path)
+                return path
+            except Exception as exc:
+                last_error = exc
+                if attempt >= attempts:
+                    break
+                self._wait_for_idle(driver)
+        if last_error is not None:
+            raise last_error
+        raise WorkflowExecutionError(f"{output_name}_DOWNLOAD_FAILED", f"Falha ao gerar {output_name}.")
+
+    def _clear_download_artifacts(self, download_dir: Path, suffix: str) -> None:
+        suffix_lower = suffix.lower()
+        for item in download_dir.iterdir():
+            name_lower = item.name.lower()
+            if item.is_file() and (item.suffix.lower() == suffix_lower or name_lower.endswith(f"{suffix_lower}.crdownload")):
+                try:
+                    item.unlink()
+                except FileNotFoundError:
+                    continue
+
+    def _output_retry_attempts(self) -> int:
+        return max(1, int(self.browser_manager.config.get("execution", {}).get("output_retry_attempts", 2)))
 
     def _confirm_regeneration(self, driver, selector_prefix: str) -> None:
         self._accept_pending_alert(driver, timeout=1.5)
