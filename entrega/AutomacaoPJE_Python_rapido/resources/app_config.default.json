@@ -16,11 +16,14 @@
   "execution": {
     "test_mode_first_record_only": false,
     "max_retries_per_step": 1,
+    "max_retries_pje_server_error": 3,
     "output_retry_attempts": 2,
+    "resume_recent_calculation": true,
     "idle_alert_timeout_seconds": 0.15,
+    "regeneration_confirm_timeout_seconds": 8,
     "step_delay_ms": 0,
     "retry_backoff_seconds": 2,
-    "continue_on_record_error": false,
+    "continue_on_record_error": true,
     "resume_previous_run": true,
     "overwrite_valid_outputs": false
   },

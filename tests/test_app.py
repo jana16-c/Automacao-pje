@@ -1,5 +1,7 @@
 from threading import Event
 
+from openpyxl import load_workbook
+
 from pje_automation.app import Application
 from pje_automation.domain.errors import AutomationCancelledError, WorkflowExecutionError
 from pje_automation.domain.models import HistoricalSeries, HistoricalValue, Record, RecordSource, WorkbookPreview
@@ -15,6 +17,9 @@ def build_application() -> Application:
                 "execution": {
                     "retry_backoff_seconds": 4,
                     "test_mode_first_record_only": False,
+                    "max_retries_per_step": 1,
+                    "max_retries_pje_server_error": 3,
+                    "resume_recent_calculation": True,
                 }
             }
         },
@@ -55,6 +60,74 @@ def test_should_retry_workflow_accepts_field_persistence_errors() -> None:
     )
 
     assert should_retry is True
+
+
+def test_pje_server_error_uses_extra_retry_attempts() -> None:
+    app = build_application()
+
+    assert app._max_attempts_for_error(WorkflowExecutionError("PJE_SERVER_ERROR", "falhou")) == 4
+    assert app._should_retry_workflow(
+        WorkflowExecutionError("PJE_SERVER_ERROR", "falhou"),
+        attempt=2,
+        max_attempts=app._max_attempts_for_error(WorkflowExecutionError("PJE_SERVER_ERROR", "falhou")),
+    )
+    assert not app._should_retry_workflow(
+        WorkflowExecutionError("PJE_SERVER_ERROR", "falhou"),
+        attempt=4,
+        max_attempts=app._max_attempts_for_error(WorkflowExecutionError("PJE_SERVER_ERROR", "falhou")),
+    )
+
+
+def test_regular_retry_errors_keep_default_attempts() -> None:
+    app = build_application()
+
+    assert app._max_attempts_for_error(WorkflowExecutionError("FIELD_NOT_PERSISTED", "falhou")) == 2
+
+
+def test_resume_recent_calculation_enabled_reads_execution_config() -> None:
+    app = build_application()
+
+    assert app._resume_recent_calculation_enabled() is True
+
+
+def test_write_failure_report_creates_excel_with_error_rows(tmp_path) -> None:
+    app = build_application()
+    record = build_record("32806201551", True)
+    output = app._write_failure_report(
+        tmp_path / "falhas.xlsx",
+        [(record, WorkflowExecutionError("PJE_SERVER_ERROR", "O PJe retornou erro interno."))],
+    )
+
+    workbook = load_workbook(output)
+    sheet = workbook["Falhas"]
+
+    assert sheet.cell(row=1, column=1).value == "Registro"
+    assert sheet.cell(row=2, column=1).value == "32806201551"
+    assert sheet.cell(row=2, column=6).value == "PJE_SERVER_ERROR"
+
+
+def test_write_failure_report_uses_timestamp_when_file_is_locked(tmp_path, monkeypatch) -> None:
+    import pje_automation.app as app_module
+
+    app = build_application()
+    original_save = app_module.Workbook.save
+    calls = []
+
+    def fake_save(self, filename):
+        calls.append(filename)
+        if len(calls) == 1:
+            raise PermissionError("locked")
+        return original_save(self, filename)
+
+    monkeypatch.setattr(app_module.Workbook, "save", fake_save)
+
+    output = app._write_failure_report(
+        tmp_path / "falhas.xlsx",
+        [(build_record("32806201551", True), WorkflowExecutionError("PJE_SERVER_ERROR", "falhou"))],
+    )
+
+    assert output.name.startswith("falhas_")
+    assert output.exists()
 
 
 def test_retry_backoff_seconds_reads_execution_config() -> None:

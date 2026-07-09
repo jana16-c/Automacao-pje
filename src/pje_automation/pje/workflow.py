@@ -41,7 +41,15 @@ class Workflow:
         self.should_cancel = should_cancel
         self.register_driver = register_driver
 
-    def run_single_record(self, record: Record, model_path: Path, pdf_dir: Path, pjc_dir: Path, evidence_dir: Path) -> None:
+    def run_single_record(
+        self,
+        record: Record,
+        model_path: Path,
+        pdf_dir: Path,
+        pjc_dir: Path,
+        evidence_dir: Path,
+        resume_recent: bool = False,
+    ) -> None:
         self._ensure_not_cancelled()
         self.repository.upsert(record, JobState.VALIDANDO_DADOS)
         with TemporaryDirectory(prefix=f"pje_run_{record.record_id}_") as temp_download_dir:
@@ -53,7 +61,7 @@ class Workflow:
             try:
                 self._ensure_not_cancelled()
                 self.browser_manager.open_base_page(driver)
-                self._import_model(driver, staged_model, record)
+                self._start_or_resume_calculation(driver, staged_model, record, resume_recent=resume_recent)
                 self._ensure_not_cancelled()
                 self._fill_identity(driver, record)
                 self._ensure_not_cancelled()
@@ -76,6 +84,117 @@ class Workflow:
                 if self.register_driver is not None:
                     self.register_driver(None)
                 driver.quit()
+
+    def _start_or_resume_calculation(self, driver, model_path: Path, record: Record, resume_recent: bool) -> None:
+        if resume_recent:
+            if self._open_recent_calculation(driver, record):
+                return
+            raise WorkflowExecutionError(
+                "RECENT_CALC_NOT_FOUND",
+                f"Nao foi possivel localizar o calculo recente de {record.nome}; a automacao nao importou outro modelo.",
+            )
+        self._import_model(driver, model_path, record)
+
+    def _open_recent_calculation(self, driver, record: Record) -> bool:
+        target_name = normalize_name_key(record.nome)
+        target_cpf = normalize_cpf(record.cpf)
+        try:
+            result = driver.execute_script(
+                """
+                const targetName = arguments[0];
+                const targetCpf = arguments[1];
+                const normalize = (value) => (value || '')
+                  .normalize('NFD')
+                  .replace(/[\\u0300-\\u036f]/g, '')
+                  .replace(/[.\\-/]/g, '')
+                  .replace(/\\s+/g, ' ')
+                  .trim()
+                  .toUpperCase();
+                const matchesTarget = (text) => {
+                  const normalizedText = normalize(text);
+                  const matchesName = targetName && normalizedText.includes(targetName);
+                  const matchesCpf = targetCpf && normalizedText.includes(targetCpf);
+                  return matchesName || matchesCpf;
+                };
+                const visible = (element) => {
+                  const style = window.getComputedStyle(element);
+                  const rect = element.getBoundingClientRect();
+                  return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+                };
+
+                const recentSelect = document.querySelector('select.listaCalculosRecentes');
+                if (recentSelect) {
+                  const options = Array.from(recentSelect.options || []);
+                  const optionIndex = options.findIndex((option) => matchesTarget(option.text || option.textContent || ''));
+                  if (optionIndex >= 0) {
+                    recentSelect.selectedIndex = optionIndex;
+                    const selected = options[optionIndex];
+                    selected.selected = true;
+                    recentSelect.focus();
+                    recentSelect.dispatchEvent(new Event('input', { bubbles: true }));
+                    recentSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                    recentSelect.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window }));
+                    recentSelect.dispatchEvent(new KeyboardEvent('keypress', {
+                      bubbles: true,
+                      cancelable: true,
+                      key: 'Enter',
+                      code: 'Enter',
+                      which: 13,
+                      keyCode: 13
+                    }));
+                    return { clicked: true, text: selected.text || selected.textContent || '', mode: 'select' };
+                  }
+                }
+
+                const candidates = Array.from(document.querySelectorAll('a, [onclick], tr, li, td, span, div'));
+                for (const candidate of candidates) {
+                  if (!visible(candidate)) {
+                    continue;
+                  }
+                  const text = (candidate.innerText || candidate.textContent || '').trim();
+                  if (!text || text.length > 300) {
+                    continue;
+                  }
+                  if (!matchesTarget(text)) {
+                    continue;
+                  }
+                  const clickable = candidate.closest('a,[onclick],tr,li') || candidate;
+                  clickable.scrollIntoView({ block: 'center' });
+                  clickable.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window }));
+                  clickable.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                  clickable.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                  clickable.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                  clickable.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window }));
+                  if (typeof clickable.click === 'function') {
+                    clickable.click();
+                  }
+                  return { clicked: true, text };
+                }
+                return { clicked: false };
+                """,
+                target_name,
+                target_cpf,
+            )
+            if not result or not result.get("clicked"):
+                return False
+            self._wait_for_idle(driver)
+            return self._calculation_form_available(driver, timeout=self._operation_timeout_seconds())
+        except WorkflowExecutionError:
+            raise
+        except Exception:
+            return False
+
+    def _calculation_form_available(self, driver, timeout: int | float = 5) -> bool:
+        try:
+            for locator in self.selectors.get("calculo.nome_reclamante"):
+                try:
+                    wait_for_present_element(driver, locator, timeout=timeout)
+                    return True
+                except Exception:
+                    continue
+        except Exception:
+            return False
+        return False
 
     def _stage_model_for_browser(self, model_path: Path, staging_dir: Path) -> Path:
         staged = staging_dir / "modelo_importacao.pjc"
@@ -279,45 +398,49 @@ class Workflow:
         return None
 
     def _open_parameters_tab(self, driver) -> None:
-        switched = False
         try:
-            switched = bool(
-                driver.execute_script(
-                    """
-                    const panelInput = document.getElementById('formulario:j_id138_input');
-                    if (!panelInput || !window.RichFaces || typeof RichFaces.switchTab !== 'function') {
-                      return false;
-                    }
-                    RichFaces.switchTab('formulario:j_id138', 'formulario:tabParametrosCalculo', 'tabParametrosCalculo');
-                    return true;
-                    """
-                )
+            driver.execute_script(
+                """
+                const panelInput = document.getElementById('formulario:j_id138_input');
+                if (panelInput && window.RichFaces && typeof RichFaces.switchTab === 'function') {
+                  RichFaces.switchTab('formulario:j_id138', 'formulario:tabParametrosCalculo', 'tabParametrosCalculo');
+                }
+                """
             )
         except Exception:
-            switched = False
-        if not switched:
+            pass
+        if not self._wait_for_parameters_tab_ready(driver, timeout=3, raise_on_timeout=False):
             self._click_required(driver, "calculo.tab_parametros")
-        self._wait_for_parameters_tab_ready(driver)
+            self._wait_for_parameters_tab_ready(driver, timeout=self._operation_timeout_seconds(), raise_on_timeout=True)
 
-    def _wait_for_parameters_tab_ready(self, driver) -> None:
+    def _wait_for_parameters_tab_ready(self, driver, timeout: int | float | None = None, raise_on_timeout: bool = True) -> bool:
         def _parameters_ready(current_driver) -> bool:
-            return bool(
-                current_driver.execute_script(
-                    """
-                    const panel = document.getElementById('formulario:tabParametrosCalculo');
-                    const input = document.getElementById('formulario:j_id138_input');
-                    const demissao = document.getElementById('formulario:dataDemissaoInputDate');
-                    if (!panel || !input || !demissao) {
-                      return false;
-                    }
-                    const style = window.getComputedStyle(panel);
-                    return input.value === 'tabParametrosCalculo' && style.display !== 'none';
-                    """
-                )
-            )
+            return self._is_parameters_tab_ready(current_driver)
 
-        wait_for_condition(driver, _parameters_ready, timeout=self._operation_timeout_seconds())
+        try:
+            wait_for_condition(driver, _parameters_ready, timeout=timeout or self._operation_timeout_seconds())
+        except Exception:
+            if raise_on_timeout:
+                raise
+            return False
         self._wait_for_idle(driver)
+        return True
+
+    def _is_parameters_tab_ready(self, driver) -> bool:
+        return bool(
+            driver.execute_script(
+                """
+                const panel = document.getElementById('formulario:tabParametrosCalculo');
+                const input = document.getElementById('formulario:j_id138_input');
+                const demissao = document.getElementById('formulario:dataDemissaoInputDate');
+                if (!panel || !input || !demissao) {
+                  return false;
+                }
+                const style = window.getComputedStyle(panel);
+                return input.value === 'tabParametrosCalculo' && style.display !== 'none';
+                """
+            )
+        )
 
     def _sync_calendar_hidden_value(self, driver, field, value: str) -> None:
         field_id = field.get_attribute("id") or ""
@@ -532,14 +655,18 @@ class Workflow:
         return max(1, int(self.browser_manager.config.get("execution", {}).get("output_retry_attempts", 2)))
 
     def _confirm_regeneration(self, driver, selector_prefix: str) -> None:
-        self._accept_pending_alert(driver, timeout=1.5)
-        self._click_visible_confirmation_ok(driver)
-        self._click_if_present(driver, f"{selector_prefix}.manter_alteracoes", timeout=5)
-        self._accept_pending_alert(driver, timeout=1.5)
-        self._click_visible_confirmation_ok(driver)
-        self._click_if_present(driver, f"{selector_prefix}.confirmar", timeout=5)
-        self._accept_pending_alert(driver, timeout=2)
-        self._click_visible_confirmation_ok(driver)
+        deadline = monotonic() + self._regeneration_confirm_timeout_seconds()
+        while monotonic() < deadline:
+            self._ensure_not_cancelled()
+            clicked = False
+            clicked = self._accept_pending_alert(driver, timeout=0) or clicked
+            clicked = self._click_visible_confirmation_ok(driver) or clicked
+            clicked = self._click_if_present(driver, f"{selector_prefix}.manter_alteracoes", timeout=0.2) or clicked
+            clicked = self._click_if_present(driver, f"{selector_prefix}.confirmar", timeout=0.2) or clicked
+            if self._has_success_feedback(driver):
+                break
+            if not clicked:
+                sleep(0.1)
         self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
 
     def _run_liquidation(self, driver) -> None:
@@ -751,35 +878,9 @@ class Workflow:
     def _select_verbas_for_regeneration(self, driver) -> int:
         selected = driver.execute_script(
             """
-            const normalize = (value) => (value || '')
-              .normalize('NFD')
-              .replace(/[\\u0300-\\u036f]/g, '')
-              .replace(/\\s+/g, ' ')
-              .trim()
-              .toUpperCase();
-            const isCandidate = (input) => {
-              if (!input || input.disabled || input.type !== 'checkbox') {
-                return false;
-              }
-              const id = input.id || '';
-              const name = input.name || '';
-              if (id.includes('tipoRegeracao') || name.includes('tipoRegeracao')) {
-                return false;
-              }
-              const row = input.closest('tr');
-              const rowText = normalize(row ? (row.innerText || row.textContent) : '');
-              return rowText.includes('VERBA PRINCIPAL') || rowText.includes('REFLEXO');
-            };
-            const preferred = Array.from(document.querySelectorAll("input[type='checkbox']")).filter(isCandidate);
-            const fallback = Array.from(document.querySelectorAll("tr input[type='checkbox']")).filter((input) => {
-              if (!input || input.disabled || input.checked) {
-                return false;
-              }
-              const id = input.id || '';
-              const name = input.name || '';
-              return !id.includes('tipoRegeracao') && !name.includes('tipoRegeracao');
-            });
-            const targets = preferred.length ? preferred : fallback;
+            const targets = Array.from(
+              document.querySelectorAll("input[type='checkbox'][id^='formulario:listagem:'][id$=':verbaSelecionada']")
+            ).filter((input) => !input.disabled);
             let count = 0;
             for (const input of targets) {
               if (input.checked) {
@@ -823,6 +924,17 @@ class Workflow:
         wait_for_condition(driver, _success_visible, timeout=timeout)
         self._wait_for_idle(driver)
 
+    def _has_success_feedback(self, driver) -> bool:
+        return bool(
+            driver.execute_script(
+                """
+                const labels = Array.from(document.querySelectorAll('.sucesso .rich-messages-label, .sucesso, #divMensagem'));
+                const text = labels.map((node) => node.innerText || node.textContent || '').join(' ').toUpperCase();
+                return text.includes('OPERAÃ‡ÃƒO REALIZADA COM SUCESSO') || text.includes('OPERACAO REALIZADA COM SUCESSO');
+                """
+            )
+        )
+
     def _has_stale_report_error(self, driver) -> bool:
         try:
             return bool(
@@ -843,7 +955,7 @@ class Workflow:
         return int(self.browser_manager.config["pje_calc"].get("operation_timeout_seconds", 180))
 
     def _click_if_present(self, driver, selector_key: str, timeout: int = 30) -> bool:
-        effective_timeout = max(timeout, self._element_timeout_seconds())
+        effective_timeout = max(float(timeout), 0.1)
         try:
             for locator in self.selectors.get(selector_key):
                 try:
@@ -880,14 +992,15 @@ class Workflow:
                     };
 
                     const candidates = Array.from(
-                      document.querySelectorAll("a, button, input[type='button'], input[type='submit'], span")
+                      document.querySelectorAll("input[type='button'], input[type='submit'], button, a, span")
                     );
 
                     for (const candidate of candidates) {
                       if (!textMatches(candidate) || !isVisible(candidate)) {
                         continue;
                       }
-                      const clickable = candidate.closest("a,button,input,[role='button'],td,span") || candidate;
+                      const clickable = candidate.closest("input,button,a,[role='button']") || candidate;
+                      clickable.scrollIntoView({ block: 'center' });
                       clickable.click();
                       return true;
                     }
@@ -995,6 +1108,9 @@ class Workflow:
 
     def _idle_alert_timeout_seconds(self) -> float:
         return float(self.browser_manager.config.get("execution", {}).get("idle_alert_timeout_seconds", 0.15))
+
+    def _regeneration_confirm_timeout_seconds(self) -> float:
+        return float(self.browser_manager.config.get("execution", {}).get("regeneration_confirm_timeout_seconds", 8))
 
     def _pace(self) -> None:
         self._ensure_not_cancelled()

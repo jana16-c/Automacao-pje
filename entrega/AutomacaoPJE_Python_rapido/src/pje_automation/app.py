@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from threading import Event
+from datetime import datetime
 from time import sleep
+
+from openpyxl import Workbook
 
 from pje_automation.diagnostics.dom_probe import DomProbe
 from pje_automation.domain.errors import AutomationCancelledError, AutomationError
@@ -16,6 +19,7 @@ from pje_automation.pje.browser import BrowserManager
 from pje_automation.pje.selectors import SelectorRepository
 from pje_automation.pje.workflow import Workflow
 from pje_automation.utils.logging import configure_logging, shutdown_logging
+from pje_automation.utils.names import mask_cpf
 from pje_automation.utils.paths import ensure_output_layout
 from pje_automation.validation.inputs import resolve_model_file, validate_app_paths
 
@@ -102,7 +106,7 @@ class Application:
                     register_driver=self.set_active_driver,
                 )
                 processed_records: list[Record] = []
-                failed_records: list[str] = []
+                failed_records: list[tuple[Record, Exception]] = []
                 continue_on_error = bool(self.browser_manager.config["execution"].get("continue_on_record_error", False))
 
                 for record in records:
@@ -120,16 +124,19 @@ class Application:
                     except Exception as exc:
                         if not continue_on_error:
                             raise
-                        failed_records.append(f"{record.record_id}: {exc}")
+                        failed_records.append((record, exc))
                         logger.error("Falha definitiva no registro %s: %s", record.record_id, exc)
                         continue
                     processed_records.append(record)
 
                 self._ensure_not_cancelled()
-                if not processed_records and failed_records:
-                    raise ValueError(f"Nenhum registro foi processado com sucesso. Primeiro erro: {failed_records[0]}")
+                failure_report = None
                 if failed_records:
-                    return f"{len(processed_records)} registros processados; {len(failed_records)} com erro."
+                    failure_report = self._write_failure_report(layout.control_dir / "falhas.xlsx", failed_records)
+                if not processed_records and failed_records:
+                    return f"Nenhum registro processado; {len(failed_records)} com erro. Lista: {failure_report}"
+                if failed_records:
+                    return f"{len(processed_records)} registros processados; {len(failed_records)} com erro. Lista: {failure_report}"
                 if len(processed_records) == 1:
                     return f"Registro {processed_records[0].record_id} processado."
                 return f"{len(processed_records)} registros processados."
@@ -168,7 +175,7 @@ class Application:
         evidence_dir: Path,
         logger,
     ) -> None:
-        max_attempts = max(1, int(self.browser_manager.config["execution"].get("max_retries_per_step", 1)) + 1)
+        max_attempts = self._max_record_attempts()
         last_error: Exception | None = None
         for attempt in range(1, max_attempts + 1):
             self._ensure_not_cancelled()
@@ -180,13 +187,21 @@ class Application:
                     pdf_dir=pdf_dir,
                     pjc_dir=pjc_dir,
                     evidence_dir=evidence_dir,
+                    resume_recent=attempt > 1 and self._resume_recent_calculation_enabled(),
                 )
                 return
             except Exception as exc:
                 last_error = exc
-                if not self._should_retry_workflow(exc, attempt, max_attempts):
+                error_attempts = self._max_attempts_for_error(exc)
+                if not self._should_retry_workflow(exc, attempt, error_attempts):
                     raise
-                logger.warning("Falha transitoria na tentativa %s/%s para %s: %s", attempt, max_attempts, record.record_id, exc)
+                logger.warning(
+                    "Falha transitoria na tentativa %s/%s para %s: %s",
+                    attempt,
+                    error_attempts,
+                    record.record_id,
+                    exc,
+                )
                 self._sleep_with_cancel(self._retry_backoff_seconds())
         if last_error is not None:
             raise last_error
@@ -204,6 +219,51 @@ class Application:
                 "HISTORICO_VALIDACAO",
             }
         return False
+
+    def _max_record_attempts(self) -> int:
+        return max(self._default_record_attempts(), self._server_error_attempts())
+
+    def _max_attempts_for_error(self, exc: Exception) -> int:
+        if isinstance(exc, AutomationError) and exc.code == "PJE_SERVER_ERROR":
+            return self._server_error_attempts()
+        return self._default_record_attempts()
+
+    def _default_record_attempts(self) -> int:
+        return max(1, int(self.browser_manager.config["execution"].get("max_retries_per_step", 1)) + 1)
+
+    def _server_error_attempts(self) -> int:
+        retries = self.browser_manager.config["execution"].get("max_retries_pje_server_error", 3)
+        return max(self._default_record_attempts(), int(retries) + 1)
+
+    def _resume_recent_calculation_enabled(self) -> bool:
+        return bool(self.browser_manager.config["execution"].get("resume_recent_calculation", True))
+
+    def _write_failure_report(self, path: Path, failed_records: list[tuple[Record, Exception]]) -> Path:
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Falhas"
+        sheet.append(["Registro", "Nome", "CPF", "Aba", "Linha", "Erro", "Mensagem"])
+        for record, exc in failed_records:
+            error_code = exc.code if isinstance(exc, AutomationError) else type(exc).__name__
+            sheet.append(
+                [
+                    record.record_id,
+                    record.nome,
+                    mask_cpf(record.cpf),
+                    record.source.sheet,
+                    record.source.row,
+                    error_code,
+                    str(exc),
+                ]
+            )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            workbook.save(path)
+            return path
+        except PermissionError:
+            fallback = path.with_name(f"{path.stem}_{datetime.now():%Y%m%d_%H%M%S}{path.suffix}")
+            workbook.save(fallback)
+            return fallback
 
     def _retry_backoff_seconds(self) -> int:
         return int(self.browser_manager.config["execution"].get("retry_backoff_seconds", 4))

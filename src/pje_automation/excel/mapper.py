@@ -203,7 +203,7 @@ def collect_companion_history_series(workbook: Workbook, history_index: HistoryI
         mapping = detect_mapping(
             worksheet.iter_rows(values_only=True),
             aliases=HISTORY_HEADER_ALIASES,
-            required_fields=("nome", "competencia"),
+            required_fields=("competencia",),
         )
         if not mapping or "valor" in mapping.columns or "historico_nome" in mapping.columns:
             continue
@@ -220,17 +220,19 @@ def collect_companion_history_series(workbook: Workbook, history_index: HistoryI
             continue
 
         profiles = build_value_column_profiles(worksheet, mapping.header_row, value_columns)
+        sheet_matricula = sheet_registration_hint(worksheet, mapping)
+        sheet_nome = sheet_name_hint(worksheet, mapping)
 
         for row_index, row in enumerate(
-            worksheet.iter_rows(min_row=mapping.header_row + 1, values_only=True),
+            worksheet.iter_rows(min_row=mapping.header_row + 1, values_only=False),
             start=mapping.header_row + 1,
         ):
-            nome = to_optional_str(cell_value(row, mapping.columns.get("nome")))
+            nome = to_optional_str(cell_value(row, mapping.columns.get("nome"))) or sheet_nome
             competencia = normalize_competencia(cell_value(row, mapping.columns.get("competencia")))
-            matricula = normalize_registration(cell_value(row, mapping.columns.get("matricula")))
+            matricula = normalize_registration(cell_value(row, mapping.columns.get("matricula"))) or sheet_matricula
             if not any((nome, competencia, matricula)):
                 continue
-            if not nome or not competencia:
+            if not competencia or not (nome or matricula):
                 invalid_rows.append(f"{worksheet.title}:{row_index}")
                 continue
 
@@ -241,7 +243,7 @@ def collect_companion_history_series(workbook: Workbook, history_index: HistoryI
 
                 historico_nome = clean_history_label(header[column_index])
                 try:
-                    valor = parse_history_value(raw_valor, profiles.get(column_index))
+                    valor = parse_history_value(row[column_index], profiles.get(column_index))
                 except ValueError:
                     invalid_rows.append(f"{worksheet.title}:{row_index}")
                     continue
@@ -254,13 +256,14 @@ def collect_companion_history_series(workbook: Workbook, history_index: HistoryI
                         competencia,
                         valor,
                     )
-                add_history_value(
-                    history_index.by_nome,
-                    normalize_name_key(nome),
-                    historico_nome,
-                    competencia,
-                    valor,
-                )
+                if nome:
+                    add_history_value(
+                        history_index.by_nome,
+                        normalize_name_key(nome),
+                        historico_nome,
+                        competencia,
+                        valor,
+                    )
 
     return invalid_rows
 
@@ -293,6 +296,28 @@ def history_sources(workbook: Workbook, history_workbook: Workbook | None) -> li
     return [workbook, history_workbook]
 
 
+def sheet_registration_hint(worksheet, mapping: SheetMapping) -> str | None:
+    row_after_header = mapping.header_row + 1
+    if "matricula" in mapping.columns:
+        value = worksheet.cell(row=row_after_header, column=mapping.columns["matricula"] + 1).value
+        matricula = normalize_registration(value)
+        if matricula:
+            return matricula
+    return normalize_registration(worksheet.cell(row=2, column=1).value)
+
+
+def sheet_name_hint(worksheet, mapping: SheetMapping) -> str | None:
+    row_after_header = mapping.header_row + 1
+    if "nome" in mapping.columns:
+        nome = to_optional_str(worksheet.cell(row=row_after_header, column=mapping.columns["nome"] + 1).value)
+        if nome:
+            return nome
+    title = " ".join(str(worksheet.title or "").split())
+    if not title or normalize_name_key(title).startswith("PLANILHA"):
+        return None
+    return title
+
+
 def sort_history_values(history_index: HistoryIndex) -> None:
     for groups in (history_index.by_cpf, history_index.by_matricula, history_index.by_nome):
         for series_by_name in groups.values():
@@ -315,7 +340,7 @@ def add_history_value(
 
 def build_value_column_profiles(worksheet, header_row: int, value_columns: list[int]) -> dict[int, ValueColumnProfile]:
     profiles = {column_index: ValueColumnProfile() for column_index in value_columns}
-    for row in worksheet.iter_rows(min_row=header_row + 1, values_only=True):
+    for row in worksheet.iter_rows(min_row=header_row + 1, values_only=False):
         for column_index in value_columns:
             raw_value = cell_value(row, column_index)
             if not has_meaningful_history_value(raw_value):
@@ -333,13 +358,16 @@ def build_value_column_profiles(worksheet, header_row: int, value_columns: list[
 
 
 def parse_history_value(raw_value: object, profile: ValueColumnProfile | None) -> Decimal:
-    value = parse_decimal(raw_value)
+    value = parse_decimal(raw_cell_value(raw_value))
     if profile and should_shift_sparse_single_decimal(raw_value, profile):
         return (value / Decimal("10")).quantize(Decimal("0.01"))
     return value
 
 
 def should_shift_sparse_single_decimal(raw_value: object, profile: ValueColumnProfile) -> bool:
+    formatted_places = formatted_decimal_places_count(raw_value)
+    if formatted_places is not None and formatted_places >= 2:
+        return False
     if profile.one_decimal_count <= 0 or profile.two_plus_decimal_count <= 0:
         return False
     if profile.one_decimal_count > max(3, profile.numeric_count // 5):
@@ -347,12 +375,13 @@ def should_shift_sparse_single_decimal(raw_value: object, profile: ValueColumnPr
     if decimal_places_count(raw_value) != 1:
         return False
     try:
-        return Decimal(str(raw_value)).copy_abs() < Decimal("10")
+        return Decimal(str(raw_cell_value(raw_value))).copy_abs() < Decimal("10")
     except Exception:
         return False
 
 
 def decimal_places_count(value: object) -> int | None:
+    value = raw_cell_value(value)
     if isinstance(value, int):
         return 0
     if isinstance(value, float):
@@ -386,7 +415,30 @@ def competencia_sort_key(competencia: str) -> tuple[int, int, str]:
 def cell_value(row: tuple[object, ...], index: int | None) -> object | None:
     if index is None or index >= len(row):
         return None
-    return row[index]
+    return raw_cell_value(row[index])
+
+
+def raw_cell_value(value: object) -> object:
+    return getattr(value, "value", value)
+
+
+def formatted_decimal_places_count(value: object) -> int | None:
+    number_format = getattr(value, "number_format", None)
+    if not number_format or number_format == "General":
+        return None
+    section = str(number_format).split(";", 1)[0]
+    if "." in section:
+        decimal_part = section.rsplit(".", 1)[1]
+    elif "," in section and any(marker in section.rsplit(",", 1)[1] for marker in ("0", "#")):
+        decimal_part = section.rsplit(",", 1)[1]
+    else:
+        return 0
+    count = 0
+    for char in decimal_part:
+        if char not in {"0", "#"}:
+            break
+        count += 1
+    return count
 
 
 def to_optional_str(value: object) -> str | None:

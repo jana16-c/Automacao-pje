@@ -83,6 +83,41 @@ def test_build_preview_supports_companion_history_workbook_and_name_fallback() -
     assert [item.competencia for item in record.historicos[0].valores] == ["06/2015", "07/2015"]
 
 
+def test_build_preview_matches_companion_history_across_multiple_employee_sheets_by_a2_registration() -> None:
+    cadastro = Workbook()
+    controle = cadastro.active
+    controle.title = "Controle"
+    controle.append(["Matricula", "Nome", "CPF", "Demissao"])
+    controle.append(["1001", "ANA SILVA", "11111111111", "01/02/2020"])
+    controle.append(["1002", "BRUNO LIMA", "22222222222", "01/02/2020"])
+
+    historico = Workbook()
+    ana = historico.active
+    ana.title = "ANA SILVA"
+    ana["A1"] = "Matricula"
+    ana["A2"] = "1001"
+    ana.append([])
+    ana.append(["Periodo", "Base"])
+    ana.append(["01/2020", "10,00"])
+    ana.append(["02/2020", "20,00"])
+
+    bruno = historico.create_sheet("BRUNO LIMA")
+    bruno["A1"] = "Matricula"
+    bruno["A2"] = "1002"
+    bruno.append([])
+    bruno.append(["Periodo", "Base"])
+    bruno.append(["01/2020", "30,00"])
+
+    preview = build_preview(cadastro, history_workbook=historico, limit=None)
+
+    records_by_name = {record.nome: record for record in preview.valid_records}
+    ana_values = [str(item.valor) for item in records_by_name["ANA SILVA"].historicos[0].valores]
+    bruno_values = [str(item.valor) for item in records_by_name["BRUNO LIMA"].historicos[0].valores]
+
+    assert ana_values == ["10.00", "20.00"]
+    assert bruno_values == ["30.00"]
+
+
 def test_build_preview_without_limit_keeps_rows_after_the_default_sample() -> None:
     cadastro = Workbook()
     controle = cadastro.active
@@ -129,6 +164,31 @@ def test_build_preview_normalizes_sparse_single_decimal_history_values() -> None
     assert valores["10/2014"] == "0.01"
     assert valores["01/2015"] == "0.13"
     assert valores["12/2017"] == "0.01"
+
+
+def test_build_preview_preserves_two_decimal_formatted_history_values() -> None:
+    cadastro = Workbook()
+    controle = cadastro.active
+    controle.title = "Controle"
+    controle.append(["Matricula", "Nome", "CPF", "Admissao", "Demissao"])
+    controle.append(["1001", "Maria", "12345678901", "01/01/2020", "02/01/2020"])
+
+    historico = Workbook()
+    aba = historico.active
+    aba.title = "Maria"
+    aba.append(["Matricula", "Funcionario", "Periodo", "Base"])
+    aba.append(["1001", "Maria", "01/2020", 0.24])
+    aba.append(["1001", "Maria", "02/2020", 0.5])
+    aba.append(["1001", "Maria", "03/2020", 2.2])
+    aba.append(["1001", "Maria", "04/2020", 0.18])
+    aba["D3"].number_format = "0.00"
+    aba["D4"].number_format = "0.00"
+
+    preview = build_preview(cadastro, history_workbook=historico, limit=None)
+
+    valores = {item.competencia: str(item.valor) for serie in preview.valid_records[0].historicos for item in serie.valores}
+    assert valores["02/2020"] == "0.50"
+    assert valores["03/2020"] == "2.20"
 
 
 def test_build_preview_keeps_dense_single_decimal_history_values() -> None:

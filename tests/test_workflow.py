@@ -104,6 +104,96 @@ def test_idle_alert_timeout_seconds_reads_execution_config() -> None:
     assert workflow._idle_alert_timeout_seconds() == 0.15
 
 
+def test_regeneration_confirm_timeout_seconds_reads_execution_config() -> None:
+    workflow = build_workflow()
+    workflow.browser_manager.config["execution"] = {"regeneration_confirm_timeout_seconds": 8}
+
+    assert workflow._regeneration_confirm_timeout_seconds() == 8
+
+
+def test_open_recent_calculation_clicks_matching_recent_entry() -> None:
+    workflow = build_workflow()
+    workflow.selectors = type("SelectorsStub", (), {"get": lambda self, key: [("id", "formulario:reclamanteNome")]})()
+    workflow._wait_for_idle = lambda driver: None
+
+    class DriverStub:
+        def __init__(self):
+            self.calls = []
+
+        def execute_script(self, script, target_name, target_cpf):
+            assert "select.listaCalculosRecentes" in script
+            assert "selectedIndex" in script
+            assert "dblclick" in script
+            self.calls.append((target_name, target_cpf))
+            return {"clicked": True, "text": "2675 / GIL NEY CHAVES ULHOA"}
+
+    original = __import__("pje_automation.pje.workflow", fromlist=["wait_for_present_element"])
+    saved_present = original.wait_for_present_element
+    try:
+        original.wait_for_present_element = lambda driver, locator, timeout=30: object()
+        record = type(
+            "RecordStub",
+            (),
+            {"nome": "GIL NEY CHAVES ULHOA", "cpf": "32806201551"},
+        )()
+
+        assert workflow._open_recent_calculation(DriverStub(), record) is True
+    finally:
+        original.wait_for_present_element = saved_present
+
+
+def test_resume_recent_failure_does_not_import_new_model(tmp_path) -> None:
+    workflow = build_workflow()
+    workflow._open_recent_calculation = lambda driver, record: False
+    imported = []
+    workflow._import_model = lambda driver, model_path, record: imported.append(model_path)
+    record = type("RecordStub", (), {"nome": "GIL NEY CHAVES ULHOA"})()
+
+    try:
+        workflow._start_or_resume_calculation(object(), tmp_path / "modelo.pjc", record, resume_recent=True)
+    except WorkflowExecutionError as exc:
+        assert exc.code == "RECENT_CALC_NOT_FOUND"
+    else:
+        raise AssertionError("Era esperado erro quando a retomada nao localiza calculo recente.")
+
+    assert imported == []
+
+
+def test_select_verbas_script_excludes_child_installments() -> None:
+    workflow = build_workflow()
+    workflow._wait_for_idle = lambda driver: None
+
+    class DriverStub:
+        def execute_script(self, script):
+            assert "id^='formulario:listagem:'" in script
+            assert "id$=':verbaSelecionada'" in script
+            assert "listaReflexo" not in script
+            assert "selecionarTodos" not in script
+            return 1
+
+    assert workflow._select_verbas_for_regeneration(DriverStub()) == 1
+
+
+def test_click_if_present_uses_requested_short_timeout() -> None:
+    workflow = build_workflow()
+    workflow.selectors = type("SelectorsStub", (), {"get": lambda self, key: [("id", "missing")]})()
+    seen_timeouts = []
+
+    original = __import__("pje_automation.pje.workflow", fromlist=["wait_for_present_element"])
+    saved_present = original.wait_for_present_element
+    try:
+        def fake_present(driver, locator, timeout=30):
+            seen_timeouts.append(timeout)
+            raise RuntimeError("missing")
+
+        original.wait_for_present_element = fake_present
+        assert workflow._click_if_present(object(), "verbas.confirmar", timeout=0.2) is False
+    finally:
+        original.wait_for_present_element = saved_present
+
+    assert seen_timeouts == [0.2]
+
+
 def test_wait_for_field_value_accepts_matching_value() -> None:
     workflow = build_workflow()
     workflow.selectors = type(
