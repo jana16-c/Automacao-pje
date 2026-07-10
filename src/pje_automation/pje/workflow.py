@@ -13,7 +13,7 @@ from selenium.common.exceptions import NoAlertPresentException
 from selenium.webdriver.common.by import By
 
 from pje_automation.diagnostics.evidence import save_evidence
-from pje_automation.domain.errors import AutomationCancelledError, WorkflowExecutionError
+from pje_automation.domain.errors import AutomationCancelledError, AutomationError, WorkflowExecutionError
 from pje_automation.domain.models import HistoricalSeries, Record
 from pje_automation.excel.normalization import normalize_cpf, normalize_name_key
 from pje_automation.domain.states import JobState
@@ -34,12 +34,16 @@ class Workflow:
         repository: JobRepository,
         should_cancel=None,
         register_driver=None,
+        logger=None,
+        heartbeat=None,
     ) -> None:
         self.browser_manager = browser_manager
         self.selectors = selectors
         self.repository = repository
         self.should_cancel = should_cancel
         self.register_driver = register_driver
+        self.logger = logger
+        self.heartbeat = heartbeat
 
     def run_single_record(
         self,
@@ -49,9 +53,10 @@ class Workflow:
         pjc_dir: Path,
         evidence_dir: Path,
         resume_recent: bool = False,
+        resume_state: JobState | None = None,
     ) -> None:
         self._ensure_not_cancelled()
-        self.repository.upsert(record, JobState.VALIDANDO_DADOS)
+        self._mark_progress(record, JobState.VALIDANDO_DADOS)
         with TemporaryDirectory(prefix=f"pje_run_{record.record_id}_") as temp_download_dir:
             temp_dir = Path(temp_download_dir)
             staged_model = self._stage_model_for_browser(model_path, temp_dir)
@@ -61,29 +66,108 @@ class Workflow:
             try:
                 self._ensure_not_cancelled()
                 self.browser_manager.open_base_page(driver)
-                self._start_or_resume_calculation(driver, staged_model, record, resume_recent=resume_recent)
+                resume_phase = self._resume_phase_index(resume_state)
+                can_resume_recent = resume_recent and self._can_resume_recent(resume_state)
+                if can_resume_recent and self.logger is not None and resume_state is not None:
+                    self.logger.info("Retomando registro %s a partir de %s.", record.record_id, resume_state.value)
+                self._start_or_resume_calculation(driver, staged_model, record, resume_recent=can_resume_recent)
                 self._ensure_not_cancelled()
-                self._fill_identity(driver, record)
+                if resume_phase <= 0:
+                    self._fill_identity(driver, record)
                 self._ensure_not_cancelled()
-                self._refresh_verbas(driver, record)
+                if resume_phase <= 1:
+                    self._refresh_verbas(driver, record)
                 self._ensure_not_cancelled()
-                self._refresh_fgts(driver, record)
+                if resume_phase <= 2:
+                    self._refresh_fgts(driver, record)
                 self._ensure_not_cancelled()
-                self._refresh_contribuicao_social(driver, record)
+                if resume_phase <= 3:
+                    self._refresh_contribuicao_social(driver, record)
                 self._ensure_not_cancelled()
-                self._process_historico(driver, record)
+                if resume_phase <= 4:
+                    self._process_historico(driver, record)
                 self._ensure_not_cancelled()
-                self._liquidate_and_export(driver, record, pdf_dir, pjc_dir)
-                self.repository.upsert(record, JobState.CONCLUIDO)
+                if resume_phase <= 5:
+                    self._liquidate_and_export(driver, record, pdf_dir, pjc_dir)
+                self._mark_progress(record, JobState.CONCLUIDO)
             except Exception as exc:
                 prefix = sanitize_filename(record.record_id)
-                save_evidence(driver, evidence_dir / prefix, "erro_fluxo")
-                self.repository.upsert(record, JobState.ERRO, error_code="WORKFLOW_ERROR", error_message=str(exc))
+                screenshot_path = None
+                html_path = None
+                try:
+                    screenshot_path, html_path = save_evidence(driver, evidence_dir / prefix, "erro_fluxo")
+                except Exception:
+                    pass
+                error_code = exc.code if isinstance(exc, AutomationError) else type(exc).__name__
+                current_job = self.repository.get_job(record.record_id)
+                current_resume_state = current_job.resume_state if current_job is not None else resume_state
+                error_details = self._build_error_details(
+                    driver,
+                    resume_state=current_resume_state,
+                    screenshot_path=screenshot_path,
+                    html_path=html_path,
+                )
+                if self.logger is not None:
+                    self.logger.error(
+                        "Falha no fluxo do registro %s | codigo=%s | resume=%s | screenshot=%s | html=%s",
+                        record.record_id,
+                        error_code,
+                        current_resume_state.value if current_resume_state is not None else "",
+                        screenshot_path,
+                        html_path,
+                    )
+                self.repository.mark_error(
+                    record,
+                    resume_state=current_resume_state,
+                    error_code=error_code,
+                    error_message=str(exc),
+                    error_details=error_details,
+                )
                 raise
             finally:
                 if self.register_driver is not None:
                     self.register_driver(None)
-                driver.quit()
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+
+    def _mark_progress(self, record: Record, state: JobState) -> None:
+        self._beat(state.value)
+        self.repository.upsert(record, state)
+
+    def _beat(self, context: str | None = None) -> None:
+        if callable(self.heartbeat):
+            self.heartbeat(context)
+
+    def _resume_phase_index(self, resume_state: JobState | None) -> int:
+        if resume_state in {JobState.PREENCHENDO_IDENTIFICACAO, JobState.SALVANDO_PARAMETROS}:
+            return 0
+        if resume_state == JobState.REGERANDO_VERBAS:
+            return 1
+        if resume_state == JobState.REGERANDO_FGTS:
+            return 2
+        if resume_state == JobState.REGERANDO_CONTRIBUICAO_SOCIAL:
+            return 3
+        if resume_state == JobState.PREENCHENDO_HISTORICO:
+            return 4
+        if resume_state in {JobState.LIQUIDANDO, JobState.GERANDO_PDF, JobState.EXPORTANDO_PJC, JobState.VALIDANDO_SAIDAS}:
+            return 5
+        return 0
+
+    def _can_resume_recent(self, resume_state: JobState | None) -> bool:
+        return resume_state in {
+            JobState.PREENCHENDO_IDENTIFICACAO,
+            JobState.SALVANDO_PARAMETROS,
+            JobState.REGERANDO_VERBAS,
+            JobState.REGERANDO_FGTS,
+            JobState.REGERANDO_CONTRIBUICAO_SOCIAL,
+            JobState.PREENCHENDO_HISTORICO,
+            JobState.LIQUIDANDO,
+            JobState.GERANDO_PDF,
+            JobState.EXPORTANDO_PJC,
+            JobState.VALIDANDO_SAIDAS,
+        }
 
     def _start_or_resume_calculation(self, driver, model_path: Path, record: Record, resume_recent: bool) -> None:
         if resume_recent:
@@ -202,7 +286,7 @@ class Workflow:
         return staged
 
     def _import_model(self, driver, model_path: Path, record: Record) -> None:
-        self.repository.upsert(record, JobState.IMPORTANDO_MODELO)
+        self._mark_progress(record, JobState.IMPORTANDO_MODELO)
         clicked_import = False
         for selector_key in ("home.importar_calculo", "probe.menu.importar"):
             try:
@@ -234,12 +318,12 @@ class Workflow:
         raise WorkflowExecutionError("SELECTOR_NOT_FOUND", "Nao foi possivel localizar o input de importacao do modelo.")
 
     def _fill_identity(self, driver, record: Record) -> None:
-        self.repository.upsert(record, JobState.PREENCHENDO_IDENTIFICACAO)
+        self._mark_progress(record, JobState.PREENCHENDO_IDENTIFICACAO)
         self._fill_first_available(driver, "calculo.nome_reclamante", record.nome)
         self._ensure_cpf_selected(driver)
         self._wait_for_field_enabled(driver, "calculo.cpf")
         self._fill_document_field_with_retry(driver, "calculo.cpf", record.cpf)
-        self.repository.upsert(record, JobState.SALVANDO_PARAMETROS)
+        self._mark_progress(record, JobState.SALVANDO_PARAMETROS)
         self._click_required(driver, "calculo.salvar")
         self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
         if record.data_demissao:
@@ -249,7 +333,7 @@ class Workflow:
             self._fill_field_if_needed(driver, "calculo.data_final", record.data_demissao)
             self._wait_for_field_value(driver, "calculo.data_final", record.data_demissao)
             self._wait_for_idle(driver)
-            self.repository.upsert(record, JobState.SALVANDO_PARAMETROS)
+            self._mark_progress(record, JobState.SALVANDO_PARAMETROS)
             self._click_required(driver, "calculo.salvar")
             self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
 
@@ -527,6 +611,7 @@ class Workflow:
             return
 
     def _wait_for_idle(self, driver) -> None:
+        self._beat("WAIT_IDLE")
         self._ensure_not_cancelled()
         self._accept_pending_alert(driver, timeout=self._idle_alert_timeout_seconds())
         wait_for_page_ready(driver, timeout=self._element_timeout_seconds())
@@ -537,7 +622,7 @@ class Workflow:
         self._pace()
 
     def _refresh_verbas(self, driver, record: Record) -> None:
-        self.repository.upsert(record, JobState.REGERANDO_VERBAS)
+        self._mark_progress(record, JobState.REGERANDO_VERBAS)
         self._click_required(driver, "menu.verbas", url_fragment="verba-calculo.jsf")
         selected = self._select_verbas_for_regeneration(driver)
         if selected <= 0:
@@ -549,21 +634,21 @@ class Workflow:
         self._confirm_regeneration(driver, "verbas")
 
     def _refresh_fgts(self, driver, record: Record) -> None:
-        self.repository.upsert(record, JobState.REGERANDO_FGTS)
+        self._mark_progress(record, JobState.REGERANDO_FGTS)
         self._click_required(driver, "menu.fgts", url_fragment="fgts.jsf")
         self._click_required(driver, "fgts.ocorrencias", url_fragment="parametrizar-fgts.jsf")
         self._click_required(driver, "fgts.regerar")
         self._confirm_regeneration(driver, "fgts")
 
     def _refresh_contribuicao_social(self, driver, record: Record) -> None:
-        self.repository.upsert(record, JobState.REGERANDO_CONTRIBUICAO_SOCIAL)
+        self._mark_progress(record, JobState.REGERANDO_CONTRIBUICAO_SOCIAL)
         self._click_required(driver, "menu.contribuicao_social", url_fragment="inss.jsf")
         self._click_required(driver, "contribuicao.ocorrencias")
         self._click_required(driver, "contribuicao.regerar")
         self._confirm_regeneration(driver, "contribuicao")
 
     def _process_historico(self, driver, record: Record) -> None:
-        self.repository.upsert(record, JobState.PREENCHENDO_HISTORICO)
+        self._mark_progress(record, JobState.PREENCHENDO_HISTORICO)
         self._click_required(driver, "menu.historico_salarial", url_fragment="historico-salarial.jsf")
         historicos = [serie for serie in record.historicos if serie.valores]
         if not historicos:
@@ -574,10 +659,10 @@ class Workflow:
             self._edit_historical_series(driver, serie)
 
     def _liquidate_and_export(self, driver, record: Record, pdf_dir: Path, pjc_dir: Path) -> None:
-        self.repository.upsert(record, JobState.LIQUIDANDO)
+        self._mark_progress(record, JobState.LIQUIDANDO)
         self._run_liquidation(driver)
 
-        self.repository.upsert(record, JobState.GERANDO_PDF)
+        self._mark_progress(record, JobState.GERANDO_PDF)
         safe_name = sanitize_filename(record.nome)
         download_dir_raw = getattr(driver, "_pje_download_dir", None)
         download_dir = Path(download_dir_raw) if download_dir_raw else None
@@ -587,11 +672,11 @@ class Workflow:
         pdf_path = self._download_pdf(driver, download_dir)
         shutil.move(str(pdf_path), pdf_dir / f"{safe_name}.pdf")
 
-        self.repository.upsert(record, JobState.EXPORTANDO_PJC)
+        self._mark_progress(record, JobState.EXPORTANDO_PJC)
         pjc_path = self._download_pjc(driver, download_dir)
         shutil.move(str(pjc_path), pjc_dir / f"{safe_name}.pjc")
 
-        self.repository.upsert(record, JobState.VALIDANDO_SAIDAS)
+        self._mark_progress(record, JobState.VALIDANDO_SAIDAS)
 
     def _download_pdf(self, driver, download_dir: Path) -> Path:
         return self._collect_download_with_retry(
@@ -625,6 +710,7 @@ class Workflow:
         attempts = self._output_retry_attempts()
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
+            self._beat(f"DOWNLOAD_{output_name}_{attempt}")
             self._ensure_not_cancelled()
             self._clear_download_artifacts(download_dir, suffix)
             try:
@@ -657,6 +743,7 @@ class Workflow:
     def _confirm_regeneration(self, driver, selector_prefix: str) -> None:
         deadline = monotonic() + self._regeneration_confirm_timeout_seconds()
         while monotonic() < deadline:
+            self._beat(f"CONFIRM_{selector_prefix}")
             self._ensure_not_cancelled()
             clicked = False
             clicked = self._accept_pending_alert(driver, timeout=0) or clicked
@@ -809,6 +896,7 @@ class Workflow:
         return {token for token in expanded if token not in stop_tokens}
 
     def _fill_historical_grid(self, driver, serie: HistoricalSeries) -> None:
+        self._beat(f"HISTORICO_{serie.nome}")
         grid_rows = driver.execute_script(
             """
             return Array.from(document.querySelectorAll("[id^='formulario:listagemMC:'][id$=':valor']")).map((input) => {
@@ -868,6 +956,7 @@ class Workflow:
         )
         if not result or not result.get("ok"):
             raise WorkflowExecutionError("HISTORICO_PREENCHIMENTO", f"Falha ao preencher historico salarial: {result}")
+        self._beat(f"HISTORICO_OK_{serie.nome}")
         self._wait_for_idle(driver)
         if self._history_validation_enabled():
             self._validate_history_grid(driver, payload)
@@ -1017,6 +1106,7 @@ class Workflow:
     def _accept_pending_alert(self, driver, timeout: float = 1.0) -> bool:
         deadline = monotonic() + max(timeout, 0)
         while True:
+            self._beat("ALERT_CHECK")
             try:
                 alert = driver.switch_to.alert
                 _ = alert.text
@@ -1043,6 +1133,41 @@ class Workflow:
                 """
             )
         )
+
+    def _build_error_details(
+        self,
+        driver,
+        *,
+        resume_state: JobState | None,
+        screenshot_path: Path | None,
+        html_path: Path | None,
+    ) -> str:
+        details: list[str] = []
+        if resume_state is not None:
+            details.append(f"resume_state={resume_state.value}")
+        try:
+            current_url = getattr(driver, "current_url", "")
+            if current_url:
+                details.append(f"url={current_url}")
+        except Exception:
+            pass
+        try:
+            title = getattr(driver, "title", "")
+            if title:
+                details.append(f"titulo={title}")
+        except Exception:
+            pass
+        if screenshot_path is not None:
+            details.append(f"screenshot={screenshot_path}")
+        if html_path is not None:
+            details.append(f"html={html_path}")
+        try:
+            snippet = self._page_text(driver)
+            if snippet:
+                details.append(f"pagina={snippet[:500]}")
+        except Exception:
+            pass
+        return "\n".join(details)
 
     def _raise_if_known_business_error(self, driver) -> None:
         try:
@@ -1113,6 +1238,7 @@ class Workflow:
         return float(self.browser_manager.config.get("execution", {}).get("regeneration_confirm_timeout_seconds", 8))
 
     def _pace(self) -> None:
+        self._beat("PACE")
         self._ensure_not_cancelled()
         delay_ms = int(self.browser_manager.config.get("execution", {}).get("step_delay_ms", 0))
         if delay_ms > 0:

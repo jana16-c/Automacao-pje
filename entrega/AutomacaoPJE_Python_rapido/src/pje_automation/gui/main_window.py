@@ -168,6 +168,12 @@ class MainWindow(tk.Tk):
         self.preview_box.insert(tk.END, f"Registros validos: {len(preview.valid_records)}\n")
         self.preview_box.insert(tk.END, f"Linhas invalidas: {len(preview.invalid_rows)}\n")
         self.preview_box.insert(tk.END, f"Ambiguidades: {len(preview.ambiguous_rows)}\n\n")
+        if preview.ignored_control_sheets:
+            self.preview_box.insert(tk.END, f"Abas ignoradas no cadastro: {', '.join(preview.ignored_control_sheets)}\n")
+        if preview.ignored_history_sheets:
+            self.preview_box.insert(tk.END, f"Abas ignoradas no historico: {', '.join(preview.ignored_history_sheets)}\n")
+        if preview.ignored_control_sheets or preview.ignored_history_sheets:
+            self.preview_box.insert(tk.END, "\n")
         for record in preview.valid_records[:10]:
             self.preview_box.insert(
                 tk.END,

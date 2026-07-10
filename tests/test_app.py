@@ -1,10 +1,13 @@
+from datetime import datetime
 from threading import Event
 
 from openpyxl import load_workbook
+from selenium.common.exceptions import TimeoutException
 
 from pje_automation.app import Application
 from pje_automation.domain.errors import AutomationCancelledError, WorkflowExecutionError
-from pje_automation.domain.models import HistoricalSeries, HistoricalValue, Record, RecordSource, WorkbookPreview
+from pje_automation.domain.models import HistoricalSeries, HistoricalValue, JobRecord, Record, RecordSource, WorkbookPreview
+from pje_automation.domain.states import JobState
 
 
 def build_application() -> Application:
@@ -20,6 +23,12 @@ def build_application() -> Application:
                     "max_retries_per_step": 1,
                     "max_retries_pje_server_error": 3,
                     "resume_recent_calculation": True,
+                    "resume_previous_run": True,
+                    "overwrite_valid_outputs": False,
+                    "cooldown_every_records": 5,
+                    "cooldown_seconds": 120,
+                    "record_watchdog_timeout_seconds": 240,
+                    "watchdog_poll_seconds": 5,
                 }
             }
         },
@@ -93,9 +102,21 @@ def test_resume_recent_calculation_enabled_reads_execution_config() -> None:
 def test_write_failure_report_creates_excel_with_error_rows(tmp_path) -> None:
     app = build_application()
     record = build_record("32806201551", True)
+    job = JobRecord(
+        record_id=record.record_id,
+        nome=record.nome,
+        cpf_masked="***.***.***-**",
+        state=JobState.ERRO,
+        updated_at=datetime.now(),
+        resume_state=JobState.REGERANDO_FGTS,
+        attempt_count=3,
+        error_code="PJE_SERVER_ERROR",
+        error_message="O PJe retornou erro interno.",
+        error_details="url=http://localhost/pjecalc",
+    )
     output = app._write_failure_report(
         tmp_path / "falhas.xlsx",
-        [(record, WorkflowExecutionError("PJE_SERVER_ERROR", "O PJe retornou erro interno."))],
+        [(record, WorkflowExecutionError("PJE_SERVER_ERROR", "O PJe retornou erro interno."), job, None)],
     )
 
     workbook = load_workbook(output)
@@ -104,6 +125,10 @@ def test_write_failure_report_creates_excel_with_error_rows(tmp_path) -> None:
     assert sheet.cell(row=1, column=1).value == "Registro"
     assert sheet.cell(row=2, column=1).value == "32806201551"
     assert sheet.cell(row=2, column=6).value == "PJE_SERVER_ERROR"
+    assert sheet.cell(row=2, column=8).value == "ERRO"
+    assert sheet.cell(row=2, column=9).value == "REGERANDO_FGTS"
+    assert sheet.cell(row=2, column=10).value == 3
+    assert sheet.cell(row=2, column=11).value == "url=http://localhost/pjecalc"
 
 
 def test_write_failure_report_uses_timestamp_when_file_is_locked(tmp_path, monkeypatch) -> None:
@@ -123,7 +148,7 @@ def test_write_failure_report_uses_timestamp_when_file_is_locked(tmp_path, monke
 
     output = app._write_failure_report(
         tmp_path / "falhas.xlsx",
-        [(build_record("32806201551", True), WorkflowExecutionError("PJE_SERVER_ERROR", "falhou"))],
+        [(build_record("32806201551", True), WorkflowExecutionError("PJE_SERVER_ERROR", "falhou"), None, None)],
     )
 
     assert output.name.startswith("falhas_")
@@ -134,6 +159,18 @@ def test_retry_backoff_seconds_reads_execution_config() -> None:
     app = build_application()
 
     assert app._retry_backoff_seconds() == 4
+
+
+def test_record_watchdog_timeout_seconds_reads_execution_config() -> None:
+    app = build_application()
+
+    assert app._record_watchdog_timeout_seconds() == 240
+
+
+def test_should_retry_workflow_accepts_timeout_exception() -> None:
+    app = build_application()
+
+    assert app._should_retry_workflow(TimeoutException("travou"), attempt=1, max_attempts=2) is True
 
 
 def test_select_records_for_execution_prefers_history_matches() -> None:
@@ -180,6 +217,83 @@ def test_select_records_for_execution_honors_test_mode_limit() -> None:
     selected = app._select_records_for_execution(preview, history_file_provided=True, apply_test_mode_limit=True)
 
     assert [record.record_id for record in selected] == ["1"]
+
+
+def test_build_execution_plan_skips_completed_record_with_outputs(tmp_path) -> None:
+    app = build_application()
+    record = build_record("32806201551", True)
+    pdf_dir = tmp_path / "PDF"
+    pjc_dir = tmp_path / "PJC"
+    pdf_dir.mkdir()
+    pjc_dir.mkdir()
+    pdf_file, pjc_file = app._record_output_paths(record, pdf_dir, pjc_dir)
+    pdf_file.write_bytes(b"%PDF")
+    pjc_file.write_text("PJC")
+    repository = type(
+        "RepositoryStub",
+        (),
+        {
+            "list_jobs": lambda self: [
+                JobRecord(
+                    record_id=record.record_id,
+                    nome=record.nome,
+                    cpf_masked="***",
+                    state=JobState.CONCLUIDO,
+                    updated_at=datetime.now(),
+                )
+            ]
+        },
+    )()
+    logger = type("LoggerStub", (), {"info": lambda *args, **kwargs: None})()
+
+    plan, skipped = app._build_execution_plan([record], repository, pdf_dir, pjc_dir, logger)
+
+    assert plan == []
+    assert skipped == [record]
+
+
+def test_build_execution_plan_marks_incomplete_record_for_resume(tmp_path) -> None:
+    app = build_application()
+    record = build_record("32806201551", True)
+    pdf_dir = tmp_path / "PDF"
+    pjc_dir = tmp_path / "PJC"
+    pdf_dir.mkdir()
+    pjc_dir.mkdir()
+    repository = type(
+        "RepositoryStub",
+        (),
+        {
+            "list_jobs": lambda self: [
+                JobRecord(
+                    record_id=record.record_id,
+                    nome=record.nome,
+                    cpf_masked="***",
+                    state=JobState.REGERANDO_FGTS,
+                    updated_at=datetime.now(),
+                )
+            ]
+        },
+    )()
+    logger = type("LoggerStub", (), {"info": lambda *args, **kwargs: None})()
+
+    plan, skipped = app._build_execution_plan([record], repository, pdf_dir, pjc_dir, logger)
+
+    assert plan == [(record, JobState.REGERANDO_FGTS)]
+    assert skipped == []
+
+
+def test_resume_state_from_job_prefers_checkpoint_state() -> None:
+    app = build_application()
+    job = JobRecord(
+        record_id="1",
+        nome="Teste",
+        cpf_masked="***",
+        state=JobState.ERRO,
+        updated_at=datetime.now(),
+        resume_state=JobState.PREENCHENDO_HISTORICO,
+    )
+
+    assert app._resume_state_from_job(job) == JobState.PREENCHENDO_HISTORICO
 
 
 def test_request_stop_marks_application_as_cancelled() -> None:

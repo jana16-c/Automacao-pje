@@ -31,3 +31,16 @@ def test_configure_chrome_download_behavior_tries_browser_and_page_commands(tmp_
     assert calls[0][0] == "Browser.setDownloadBehavior"
     assert calls[1][0] == "Page.setDownloadBehavior"
     assert calls[1][1]["downloadPath"] == str(tmp_path)
+
+
+def test_apply_runtime_window_state_minimizes_when_enabled() -> None:
+    manager = BrowserManager()
+    called = []
+
+    class DriverStub:
+        def minimize_window(self):
+            called.append(True)
+
+    manager._apply_runtime_window_state(DriverStub())
+
+    assert called == [True]

@@ -25,7 +25,12 @@
     "retry_backoff_seconds": 2,
     "continue_on_record_error": true,
     "resume_previous_run": true,
-    "overwrite_valid_outputs": false
+    "overwrite_valid_outputs": false,
+    "cooldown_every_records": 5,
+    "cooldown_seconds": 120,
+    "record_watchdog_timeout_seconds": 240,
+    "watchdog_poll_seconds": 5,
+    "minimize_browser_window": true
   },
   "output": {
     "mask_cpf_in_logs": true,

@@ -63,7 +63,8 @@ def build_preview(workbook: Workbook, history_workbook: Workbook | None = None, 
     valid_records: list[Record] = []
     invalid_rows: list[str] = []
     ambiguous_rows: list[str] = []
-    history_index, history_invalid_rows = collect_history_series(workbook, history_workbook=history_workbook)
+    used_control_sheets: set[str] = set()
+    history_index, history_invalid_rows, used_history_sheets = collect_history_series(workbook, history_workbook=history_workbook)
     invalid_rows.extend(history_invalid_rows)
 
     for worksheet in workbook.worksheets:
@@ -74,6 +75,7 @@ def build_preview(workbook: Workbook, history_workbook: Workbook | None = None, 
         )
         if not mapping:
             continue
+        used_control_sheets.add(worksheet.title)
 
         for row_index, row in enumerate(
             worksheet.iter_rows(min_row=mapping.header_row + 1, values_only=True),
@@ -117,11 +119,20 @@ def build_preview(workbook: Workbook, history_workbook: Workbook | None = None, 
     if not valid_records:
         ambiguous_rows.append("Nenhuma linha elegivel foi encontrada com nome, CPF e data de demissao.")
 
+    if history_workbook is None or history_workbook is workbook:
+        ignored_control_sheets = sorted(sheet for sheet in workbook.sheetnames if sheet not in (used_control_sheets | used_history_sheets))
+        ignored_history_sheets: list[str] = []
+    else:
+        ignored_control_sheets = sorted(sheet for sheet in workbook.sheetnames if sheet not in used_control_sheets)
+        ignored_history_sheets = sorted(sheet for sheet in history_workbook.sheetnames if sheet not in used_history_sheets)
+
     return WorkbookPreview(
         valid_records=valid_records,
         invalid_rows=invalid_rows,
         ambiguous_rows=ambiguous_rows,
         sheet_names=workbook.sheetnames,
+        ignored_control_sheets=ignored_control_sheets,
+        ignored_history_sheets=ignored_history_sheets,
     )
 
 
@@ -146,20 +157,26 @@ def detect_mapping(
     return None
 
 
-def collect_history_series(workbook: Workbook, history_workbook: Workbook | None = None) -> tuple[HistoryIndex, list[str]]:
+def collect_history_series(workbook: Workbook, history_workbook: Workbook | None = None) -> tuple[HistoryIndex, list[str], set[str]]:
     history_index = HistoryIndex(by_cpf={}, by_matricula={}, by_nome={})
     invalid_rows: list[str] = []
+    used_sheets: set[str] = set()
 
     for source_workbook in history_sources(workbook, history_workbook):
-        invalid_rows.extend(collect_structured_history_series(source_workbook, history_index))
-        invalid_rows.extend(collect_companion_history_series(source_workbook, history_index))
+        structured_invalid_rows, structured_used_sheets = collect_structured_history_series(source_workbook, history_index)
+        invalid_rows.extend(structured_invalid_rows)
+        used_sheets.update(structured_used_sheets)
+        companion_invalid_rows, companion_used_sheets = collect_companion_history_series(source_workbook, history_index)
+        invalid_rows.extend(companion_invalid_rows)
+        used_sheets.update(companion_used_sheets)
 
     sort_history_values(history_index)
-    return history_index, invalid_rows
+    return history_index, invalid_rows, used_sheets
 
 
-def collect_structured_history_series(workbook: Workbook, history_index: HistoryIndex) -> list[str]:
+def collect_structured_history_series(workbook: Workbook, history_index: HistoryIndex) -> tuple[list[str], set[str]]:
     invalid_rows: list[str] = []
+    used_sheets: set[str] = set()
     for worksheet in workbook.worksheets:
         mapping = detect_mapping(
             worksheet.iter_rows(values_only=True),
@@ -168,6 +185,7 @@ def collect_structured_history_series(workbook: Workbook, history_index: History
         )
         if not mapping:
             continue
+        used_sheets.add(worksheet.title)
 
         for row_index, row in enumerate(
             worksheet.iter_rows(min_row=mapping.header_row + 1, values_only=True),
@@ -194,11 +212,12 @@ def collect_structured_history_series(workbook: Workbook, history_index: History
 
             add_history_value(history_index.by_cpf, cpf, historico_nome, competencia, valor)
 
-    return invalid_rows
+    return invalid_rows, used_sheets
 
 
-def collect_companion_history_series(workbook: Workbook, history_index: HistoryIndex) -> list[str]:
+def collect_companion_history_series(workbook: Workbook, history_index: HistoryIndex) -> tuple[list[str], set[str]]:
     invalid_rows: list[str] = []
+    used_sheets: set[str] = set()
     for worksheet in workbook.worksheets:
         mapping = detect_mapping(
             worksheet.iter_rows(values_only=True),
@@ -207,6 +226,7 @@ def collect_companion_history_series(workbook: Workbook, history_index: HistoryI
         )
         if not mapping or "valor" in mapping.columns or "historico_nome" in mapping.columns:
             continue
+        used_sheets.add(worksheet.title)
 
         header_row = next(worksheet.iter_rows(min_row=mapping.header_row, max_row=mapping.header_row, values_only=True))
         header = list(header_row)
@@ -265,7 +285,7 @@ def collect_companion_history_series(workbook: Workbook, history_index: HistoryI
                         valor,
                     )
 
-    return invalid_rows
+    return invalid_rows, used_sheets
 
 
 def resolve_historicos(

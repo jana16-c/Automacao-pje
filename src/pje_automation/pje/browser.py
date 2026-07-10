@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Any
 
 import requests
@@ -40,6 +41,21 @@ class BrowserManager:
                 details=str(exc),
             ) from exc
 
+    def wait_until_pje_available(self, timeout_seconds: int | None = None) -> None:
+        timeout = int(timeout_seconds or self.config["pje_calc"].get("startup_timeout_seconds", 120))
+        deadline = monotonic() + max(timeout, 1)
+        last_error: Exception | None = None
+        while monotonic() < deadline:
+            try:
+                self.ensure_pje_available()
+                return
+            except PjeUnavailableError as exc:
+                last_error = exc
+                sleep(2)
+        if last_error is not None:
+            raise last_error
+        self.ensure_pje_available()
+
     def open_driver(self, download_dir: Path | None = None) -> WebDriver:
         browser_name = self.config["browser"].get("name", "firefox").lower()
         if browser_name == "chrome":
@@ -48,6 +64,7 @@ class BrowserManager:
             driver = self._open_firefox(download_dir=download_dir)
         if download_dir is not None:
             setattr(driver, "_pje_download_dir", str(download_dir))
+        self._apply_runtime_window_state(driver)
         return driver
 
     def _open_firefox(self, download_dir: Path | None) -> WebDriver:
@@ -71,7 +88,11 @@ class BrowserManager:
 
         driver_path = self.config["browser"].get("geckodriver_path")
         service = FirefoxService(executable_path=driver_path) if driver_path else FirefoxService()
-        return webdriver.Firefox(options=options, service=service)
+        driver = webdriver.Firefox(options=options, service=service)
+        driver.set_page_load_timeout(int(self.config["pje_calc"].get("operation_timeout_seconds", 180)))
+        driver.set_script_timeout(int(self.config["pje_calc"].get("operation_timeout_seconds", 180)))
+        driver.implicitly_wait(0)
+        return driver
 
     def _open_chrome(self, download_dir: Path | None) -> WebDriver:
         options = ChromeOptions()
@@ -135,6 +156,14 @@ class BrowserManager:
 
     def find_visible_text(self, driver: WebDriver, text: str) -> bool:
         return bool(driver.find_elements(By.XPATH, f"//*[contains(normalize-space(.), {json.dumps(text)})]"))
+
+    def _apply_runtime_window_state(self, driver: WebDriver) -> None:
+        if not self.config.get("execution", {}).get("minimize_browser_window", True):
+            return
+        try:
+            driver.minimize_window()
+        except Exception:
+            return
 
 
 def load_config(path: Path) -> dict[str, Any]:

@@ -44,6 +44,8 @@ class WorkbookPreview:
     invalid_rows: list[str]
     ambiguous_rows: list[str]
     sheet_names: list[str]
+    ignored_control_sheets: list[str] = field(default_factory=list)
+    ignored_history_sheets: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -90,5 +92,8 @@ class JobRecord:
     cpf_masked: str
     state: JobState
     updated_at: datetime
+    resume_state: JobState | None = None
+    attempt_count: int = 0
     error_code: str | None = None
     error_message: str | None = None
+    error_details: str | None = None

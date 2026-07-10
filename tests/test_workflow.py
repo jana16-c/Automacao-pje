@@ -1,12 +1,14 @@
 from pathlib import Path
 
 from pje_automation.domain.errors import AutomationCancelledError, OutputValidationError, WorkflowExecutionError
+from pje_automation.domain.states import JobState
 from pje_automation.pje.workflow import Workflow
 
 
 def build_workflow() -> Workflow:
     workflow = Workflow.__new__(Workflow)
     workflow.browser_manager = type("BrowserManagerStub", (), {"config": {"pje_calc": {"operation_timeout_seconds": 180}}})()
+    workflow.heartbeat = None
     return workflow
 
 
@@ -109,6 +111,19 @@ def test_regeneration_confirm_timeout_seconds_reads_execution_config() -> None:
     workflow.browser_manager.config["execution"] = {"regeneration_confirm_timeout_seconds": 8}
 
     assert workflow._regeneration_confirm_timeout_seconds() == 8
+
+
+def test_resume_phase_index_maps_export_resume_to_last_phase() -> None:
+    workflow = build_workflow()
+
+    assert workflow._resume_phase_index(JobState.GERANDO_PDF) == 5
+
+
+def test_can_resume_recent_accepts_checkpoint_states() -> None:
+    workflow = build_workflow()
+
+    assert workflow._can_resume_recent(JobState.PREENCHENDO_HISTORICO) is True
+    assert workflow._can_resume_recent(JobState.IMPORTANDO_MODELO) is False
 
 
 def test_open_recent_calculation_clicks_matching_recent_entry() -> None:

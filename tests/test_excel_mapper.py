@@ -118,6 +118,25 @@ def test_build_preview_matches_companion_history_across_multiple_employee_sheets
     assert bruno_values == ["30.00"]
 
 
+def test_build_preview_lists_ignored_history_sheets() -> None:
+    cadastro = Workbook()
+    controle = cadastro.active
+    controle.title = "Controle"
+    controle.append(["Matricula", "Nome", "CPF", "Demissao"])
+    controle.append(["1001", "ANA SILVA", "11111111111", "01/02/2020"])
+
+    historico = Workbook()
+    ana = historico.active
+    ana.title = "ANA SILVA"
+    ana.append(["Matricula", "Funcionario", "Periodo", "Base"])
+    ana.append(["1001", "ANA SILVA", "01/2020", "10,00"])
+    historico.create_sheet("Resumo")
+
+    preview = build_preview(cadastro, history_workbook=historico, limit=None)
+
+    assert preview.ignored_history_sheets == ["Resumo"]
+
+
 def test_build_preview_without_limit_keeps_rows_after_the_default_sample() -> None:
     cadastro = Workbook()
     controle = cadastro.active
