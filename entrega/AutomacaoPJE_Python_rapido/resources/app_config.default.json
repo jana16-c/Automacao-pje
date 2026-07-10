@@ -28,6 +28,7 @@
     "overwrite_valid_outputs": false,
     "cooldown_every_records": 5,
     "cooldown_seconds": 120,
+    "failed_record_revisit_rounds": 1,
     "record_watchdog_timeout_seconds": 240,
     "watchdog_poll_seconds": 5,
     "minimize_browser_window": true

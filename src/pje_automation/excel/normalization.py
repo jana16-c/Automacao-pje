@@ -33,6 +33,10 @@ def normalize_registration(value: object) -> str:
     return digits or str(value).strip()
 
 
+def normalize_process_digits(value: object) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
 def normalize_date(value: object) -> str | None:
     if value in (None, ""):
         return None

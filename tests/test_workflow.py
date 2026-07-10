@@ -126,6 +126,21 @@ def test_can_resume_recent_accepts_checkpoint_states() -> None:
     assert workflow._can_resume_recent(JobState.IMPORTANDO_MODELO) is False
 
 
+def test_parse_process_search_parts_extracts_cnj_segments() -> None:
+    workflow = build_workflow()
+
+    parts = workflow._parse_process_search_parts("0010953-19.2017.5.03.0034")
+
+    assert parts == {
+        "numero": "0010953",
+        "digito": "19",
+        "ano": "2017",
+        "justica": "5",
+        "regiao": "03",
+        "vara": "0034",
+    }
+
+
 def test_open_recent_calculation_clicks_matching_recent_entry() -> None:
     workflow = build_workflow()
     workflow.selectors = type("SelectorsStub", (), {"get": lambda self, key: [("id", "formulario:reclamanteNome")]})()

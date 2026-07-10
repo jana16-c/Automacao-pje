@@ -10,6 +10,7 @@ from openpyxl import Workbook
 from selenium.common.exceptions import TimeoutException, WebDriverException
 
 from pje_automation.diagnostics.dom_probe import DomProbe
+from pje_automation.domain.execution import ExecutionMode, execution_mode_requires_history_match, execution_mode_requires_model
 from pje_automation.domain.errors import AutomationCancelledError, AutomationError
 from pje_automation.domain.models import JobRecord, Record, WorkbookPreview
 from pje_automation.domain.states import JobState
@@ -40,20 +41,32 @@ class Application:
 
     def validate_inputs(
         self,
-        model_file: Path,
+        model_file: Path | None,
         excel_file: Path,
         output_dir: Path,
         history_file: Path | None = None,
+        execution_mode: ExecutionMode = ExecutionMode.NOVO_CALCULO,
     ) -> WorkbookPreview:
-        paths = validate_app_paths(model_file, excel_file, output_dir, history_file=history_file)
+        paths = validate_app_paths(
+            model_file,
+            excel_file,
+            output_dir,
+            history_file=history_file,
+            execution_mode=execution_mode,
+        )
         self.browser_manager.wait_until_pje_available()
         workbook = open_workbook(paths.excel_file)
         history_workbook = open_workbook(paths.history_file) if paths.history_file else None
         try:
-            preview = build_preview(workbook, history_workbook=history_workbook, limit=None)
+            preview = build_preview(
+                workbook,
+                history_workbook=history_workbook,
+                limit=None,
+                execution_mode=execution_mode,
+            )
             preview.valid_records = self._select_records_for_execution(
                 preview,
-                history_file_provided=history_workbook is not None,
+                history_required=execution_mode_requires_history_match(execution_mode),
                 apply_test_mode_limit=True,
             )
             return preview
@@ -70,14 +83,21 @@ class Application:
 
     def run_mvp(
         self,
-        model_file: Path,
+        model_file: Path | None,
         excel_file: Path,
         output_dir: Path,
         history_file: Path | None = None,
+        execution_mode: ExecutionMode = ExecutionMode.NOVO_CALCULO,
     ) -> str:
         self.clear_stop_request()
-        paths = validate_app_paths(model_file, excel_file, output_dir, history_file=history_file)
-        model_resolution = resolve_model_file(paths.model_file)
+        paths = validate_app_paths(
+            model_file,
+            excel_file,
+            output_dir,
+            history_file=history_file,
+            execution_mode=execution_mode,
+        )
+        model_resolution = resolve_model_file(paths.model_file) if execution_mode_requires_model(execution_mode) and paths.model_file else None
         layout = ensure_output_layout(paths.output_dir)
         logger = configure_logging(layout.logs_dir / "execucao.log")
         logger.info("Iniciando execucao MVP")
@@ -85,10 +105,15 @@ class Application:
             workbook = open_workbook(paths.excel_file)
             history_workbook = open_workbook(paths.history_file) if paths.history_file else None
             try:
-                preview = build_preview(workbook, history_workbook=history_workbook, limit=None)
+                preview = build_preview(
+                    workbook,
+                    history_workbook=history_workbook,
+                    limit=None,
+                    execution_mode=execution_mode,
+                )
                 records = self._select_records_for_execution(
                     preview,
-                    history_file_provided=history_workbook is not None,
+                    history_required=execution_mode_requires_history_match(execution_mode),
                     apply_test_mode_limit=True,
                 )
             finally:
@@ -110,42 +135,46 @@ class Application:
                     logger=logger,
                 )
                 processed_records: list[Record] = []
-                failed_records: list[tuple[Record, Exception, JobRecord | None, Path | None]] = []
                 continue_on_error = bool(self.browser_manager.config["execution"].get("continue_on_record_error", False))
                 execution_plan, skipped_records = self._build_execution_plan(records, repository, layout.pdf_dir, layout.pjc_dir, logger)
+                batch_context = {
+                    "workflow": workflow,
+                    "model_path": model_resolution.resolved_pjc if model_resolution is not None else None,
+                    "pdf_dir": layout.pdf_dir,
+                    "pjc_dir": layout.pjc_dir,
+                    "evidence_dir": layout.evidence_dir,
+                    "failure_logs_dir": layout.logs_dir / "falhas",
+                    "repository": repository,
+                    "logger": logger,
+                    "continue_on_error": continue_on_error,
+                    "execution_mode": execution_mode,
+                }
 
-                for index, (record, resume_state) in enumerate(execution_plan, start=1):
-                    self._ensure_not_cancelled()
-                    try:
-                        self._run_record_with_retries(
-                            workflow=workflow,
-                            record=record,
-                            model_path=model_resolution.resolved_pjc,
-                            pdf_dir=layout.pdf_dir,
-                            pjc_dir=layout.pjc_dir,
-                            evidence_dir=layout.evidence_dir,
-                            logger=logger,
-                            resume_state=resume_state,
-                        )
-                    except Exception as exc:
-                        job_snapshot = repository.get_job(record.record_id)
-                        detail_log = self._write_failure_detail_log(
-                            layout.logs_dir / "falhas",
-                            record,
-                            exc,
-                            job_snapshot,
-                            layout.evidence_dir / sanitize_filename(record.record_id),
-                        )
-                        if not continue_on_error:
-                            raise
-                        failed_records.append((record, exc, job_snapshot, detail_log))
-                        logger.error("Falha definitiva no registro %s: %s | detalhes=%s", record.record_id, exc, detail_log)
-                        if index < len(execution_plan):
-                            self._maybe_pause_after_batch(index, logger)
-                        continue
-                    processed_records.append(record)
-                    if index < len(execution_plan):
-                        self._maybe_pause_after_batch(index, logger)
+                batch_processed, failed_records = self._execute_record_batch(
+                    execution_plan=execution_plan,
+                    batch_label="lote principal",
+                    **batch_context,
+                )
+                processed_records.extend(batch_processed)
+
+                revisit_rounds = self._failed_record_revisit_rounds()
+                revisit_plan = self._build_revisit_plan(failed_records)
+                for revisit_round in range(1, revisit_rounds + 1):
+                    if not revisit_plan:
+                        break
+                    logger.info(
+                        "Iniciando repescagem %s/%s para %s registros que falharam.",
+                        revisit_round,
+                        revisit_rounds,
+                        len(revisit_plan),
+                    )
+                    batch_processed, failed_records = self._execute_record_batch(
+                        execution_plan=revisit_plan,
+                        batch_label=f"repescagem {revisit_round}",
+                        **batch_context,
+                    )
+                    processed_records.extend(batch_processed)
+                    revisit_plan = self._build_revisit_plan(failed_records)
 
                 self._ensure_not_cancelled()
                 failure_report = None
@@ -170,15 +199,15 @@ class Application:
     def _select_records_for_execution(
         self,
         preview: WorkbookPreview,
-        history_file_provided: bool,
+        history_required: bool,
         apply_test_mode_limit: bool,
     ) -> list[Record]:
         records = list(preview.valid_records)
-        if history_file_provided:
+        if history_required:
             matched_records = [record for record in records if any(serie.valores for serie in record.historicos)]
             if not matched_records:
                 raise ValueError(
-                    "Nenhum registro da planilha de controle correspondeu ao historico salarial por CPF, matricula ou nome."
+                    "Nenhum registro da planilha de controle correspondeu ao historico salarial por matricula ou nome."
                 )
             records = matched_records
 
@@ -190,12 +219,13 @@ class Application:
         self,
         workflow: Workflow,
         record: Record,
-        model_path: Path,
+        model_path: Path | None,
         pdf_dir: Path,
         pjc_dir: Path,
         evidence_dir: Path,
         logger,
         resume_state: JobState | None,
+        execution_mode: ExecutionMode,
     ) -> None:
         max_attempts = self._max_record_attempts()
         last_error: Exception | None = None
@@ -222,6 +252,7 @@ class Application:
                     evidence_dir=evidence_dir,
                     resume_recent=effective_resume_state is not None,
                     resume_state=effective_resume_state,
+                    execution_mode=execution_mode,
                 )
                 return
             except Exception as exc:
@@ -351,6 +382,9 @@ class Application:
     def _retry_backoff_seconds(self) -> int:
         return int(self.browser_manager.config["execution"].get("retry_backoff_seconds", 4))
 
+    def _failed_record_revisit_rounds(self) -> int:
+        return max(0, int(self.browser_manager.config["execution"].get("failed_record_revisit_rounds", 1)))
+
     def _record_watchdog_timeout_seconds(self) -> int:
         return max(30, int(self.browser_manager.config["execution"].get("record_watchdog_timeout_seconds", 240)))
 
@@ -426,6 +460,15 @@ class Application:
             resume_state = self._resume_state_from_job(existing_job)
             plan.append((record, resume_state))
         return plan, skipped_records
+
+    def _build_revisit_plan(
+        self,
+        failed_records: list[tuple[Record, Exception, JobRecord | None, Path | None]],
+    ) -> list[tuple[Record, JobState | None]]:
+        return [
+            (record, self._resume_state_from_job(job))
+            for record, _, job, _ in failed_records
+        ]
 
     def _should_skip_completed_record(
         self,
@@ -536,6 +579,65 @@ class Application:
         lines.extend("".join(format_exception(type(exc), exc, exc.__traceback__)).splitlines())
         path.write_text("\n".join(lines), encoding="utf-8")
         return path
+
+    def _execute_record_batch(
+        self,
+        *,
+        execution_plan: list[tuple[Record, JobState | None]],
+        workflow: Workflow,
+        model_path: Path | None,
+        execution_mode: ExecutionMode,
+        pdf_dir: Path,
+        pjc_dir: Path,
+        evidence_dir: Path,
+        failure_logs_dir: Path,
+        repository: JobRepository,
+        logger,
+        continue_on_error: bool,
+        batch_label: str,
+    ) -> tuple[list[Record], list[tuple[Record, Exception, JobRecord | None, Path | None]]]:
+        processed_records: list[Record] = []
+        failed_records: list[tuple[Record, Exception, JobRecord | None, Path | None]] = []
+        for index, (record, resume_state) in enumerate(execution_plan, start=1):
+            self._ensure_not_cancelled()
+            try:
+                self._run_record_with_retries(
+                    workflow=workflow,
+                    record=record,
+                    model_path=model_path,
+                    pdf_dir=pdf_dir,
+                    pjc_dir=pjc_dir,
+                    evidence_dir=evidence_dir,
+                    logger=logger,
+                    resume_state=resume_state,
+                    execution_mode=execution_mode,
+                )
+            except Exception as exc:
+                job_snapshot = repository.get_job(record.record_id)
+                detail_log = self._write_failure_detail_log(
+                    failure_logs_dir,
+                    record,
+                    exc,
+                    job_snapshot,
+                    evidence_dir / sanitize_filename(record.record_id),
+                )
+                if not continue_on_error:
+                    raise
+                failed_records.append((record, exc, job_snapshot, detail_log))
+                logger.error(
+                    "Falha definitiva no registro %s durante %s: %s | detalhes=%s",
+                    record.record_id,
+                    batch_label,
+                    exc,
+                    detail_log,
+                )
+                if index < len(execution_plan):
+                    self._maybe_pause_after_batch(index, logger)
+                continue
+            processed_records.append(record)
+            if index < len(execution_plan):
+                self._maybe_pause_after_batch(index, logger)
+        return processed_records, failed_records
 
     def _start_attempt_watchdog(self, record: Record, attempt: int, logger):
         state = {

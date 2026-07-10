@@ -2,6 +2,60 @@
   "version": "0.1.0",
   "base_url": "http://localhost:9257/pjecalc",
   "selectors": {
+    "home.buscar_calculo": [
+      {
+        "by": "id",
+        "value": "formulario:j_id38:0:j_id41:3:j_id46"
+      }
+    ],
+    "buscar.numero_processo": [
+      {
+        "by": "id",
+        "value": "formulario:numeroProcessoBusca"
+      }
+    ],
+    "buscar.digito_processo": [
+      {
+        "by": "id",
+        "value": "formulario:digitoProcessoBusca"
+      }
+    ],
+    "buscar.ano_processo": [
+      {
+        "by": "id",
+        "value": "formulario:anoProcessoBusca"
+      }
+    ],
+    "buscar.justica_processo": [
+      {
+        "by": "id",
+        "value": "formulario:justicaBusca"
+      }
+    ],
+    "buscar.regiao_processo": [
+      {
+        "by": "id",
+        "value": "formulario:regiaoBusca"
+      }
+    ],
+    "buscar.vara_processo": [
+      {
+        "by": "id",
+        "value": "formulario:varaProcessoBusca"
+      }
+    ],
+    "buscar.reclamante": [
+      {
+        "by": "id",
+        "value": "formulario:reclamanteBusca"
+      }
+    ],
+    "buscar.buscar": [
+      {
+        "by": "id",
+        "value": "formulario:buscar"
+      }
+    ],
     "home.importar_calculo": [
       {
         "by": "link_text",

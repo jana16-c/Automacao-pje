@@ -1,19 +1,20 @@
 from openpyxl import Workbook
 
+from pje_automation.domain.execution import ExecutionMode
 from pje_automation.excel.mapper import build_preview
 
 
-def test_build_preview_attaches_history_rows_by_cpf() -> None:
+def test_build_preview_attaches_history_rows_by_registration() -> None:
     workbook = Workbook()
     dados = workbook.active
     dados.title = "Dados"
-    dados.append(["Nome", "CPF", "Data Demissao"])
-    dados.append(["Maria Souza", "12345678901", "30/06/2026"])
+    dados.append(["Matricula", "Nome", "CPF", "Data Demissao"])
+    dados.append(["1001", "Maria Souza", "12345678901", "30/06/2026"])
 
     historico = workbook.create_sheet("Historico_Salarial")
-    historico.append(["CPF", "Historico Nome", "Competencia", "Valor"])
-    historico.append(["12345678901", "DIFERENCA", "07/2012", "10,50"])
-    historico.append(["12345678901", "DIFERENCA", "08/2012", "11,75"])
+    historico.append(["Matricula", "Historico Nome", "Competencia", "Valor"])
+    historico.append(["1001", "DIFERENCA", "07/2012", "10,50"])
+    historico.append(["1001", "DIFERENCA", "08/2012", "11,75"])
 
     preview = build_preview(workbook)
 
@@ -28,13 +29,13 @@ def test_build_preview_filters_history_by_requested_name() -> None:
     workbook = Workbook()
     dados = workbook.active
     dados.title = "Dados"
-    dados.append(["Nome", "CPF", "Data Demissao", "Historico Nome"])
-    dados.append(["Maria Souza", "12345678901", "30/06/2026", "BASE INFORMADA"])
+    dados.append(["Matricula", "Nome", "CPF", "Data Demissao", "Historico Nome"])
+    dados.append(["1001", "Maria Souza", "12345678901", "30/06/2026", "BASE INFORMADA"])
 
     historico = workbook.create_sheet("Historico_Salarial")
-    historico.append(["CPF", "Historico Nome", "Competencia", "Valor"])
-    historico.append(["12345678901", "BASE INFORMADA", "07/2012", "10,50"])
-    historico.append(["12345678901", "OUTRA SERIE", "07/2012", "99,99"])
+    historico.append(["Matricula", "Historico Nome", "Competencia", "Valor"])
+    historico.append(["1001", "BASE INFORMADA", "07/2012", "10,50"])
+    historico.append(["1001", "OUTRA SERIE", "07/2012", "99,99"])
 
     preview = build_preview(workbook)
 
@@ -46,8 +47,8 @@ def test_build_preview_returns_placeholder_when_requested_history_is_missing() -
     workbook = Workbook()
     dados = workbook.active
     dados.title = "Dados"
-    dados.append(["Nome", "CPF", "Data Demissao", "Historico Nome"])
-    dados.append(["Maria Souza", "12345678901", "30/06/2026", "BASE INFORMADA"])
+    dados.append(["Matricula", "Nome", "CPF", "Data Demissao", "Historico Nome"])
+    dados.append(["1001", "Maria Souza", "12345678901", "30/06/2026", "BASE INFORMADA"])
 
     preview = build_preview(workbook)
 
@@ -81,6 +82,26 @@ def test_build_preview_supports_companion_history_workbook_and_name_fallback() -
     assert len(record.historicos) == 1
     assert record.historicos[0].nome == "dif ad.not+ Reflexos"
     assert [item.competencia for item in record.historicos[0].valores] == ["06/2015", "07/2015"]
+
+
+def test_build_preview_prioritizes_registration_before_name() -> None:
+    cadastro = Workbook()
+    controle = cadastro.active
+    controle.title = "Controle"
+    controle.append(["Matricula", "Nome", "CPF", "Demissao"])
+    controle.append(["1001", "MARIA SOUZA", "12345678901", "30/06/2026"])
+
+    historico = Workbook()
+    aba = historico.active
+    aba.title = "Historico"
+    aba.append(["Matricula", "Nome", "Historico Nome", "Competencia", "Valor"])
+    aba.append(["9999", "MARIA SOUZA", "BASE ERRADA", "01/2020", "99,99"])
+    aba.append(["1001", "OUTRA PESSOA", "BASE CERTA", "01/2020", "10,00"])
+
+    preview = build_preview(cadastro, history_workbook=historico, limit=None)
+
+    record = preview.valid_records[0]
+    assert [serie.nome for serie in record.historicos] == ["BASE CERTA"]
 
 
 def test_build_preview_matches_companion_history_across_multiple_employee_sheets_by_a2_registration() -> None:
@@ -231,3 +252,53 @@ def test_build_preview_keeps_dense_single_decimal_history_values() -> None:
     assert valores["01/2020"] == "1.20"
     assert valores["02/2020"] == "2.30"
     assert valores["03/2020"] == "3.40"
+
+
+def test_build_preview_allows_existing_history_correction_without_cpf() -> None:
+    cadastro = Workbook()
+    controle = cadastro.active
+    controle.title = "Controle"
+    controle.append(["Nome", "Processo"])
+    controle.append(["MARIA SOUZA", "0010953-19.2017.5.03.0034"])
+
+    historico = Workbook()
+    aba = historico.active
+    aba.title = "MARIA SOUZA"
+    aba.append(["Funcionario", "Periodo", "Base"])
+    aba.append(["MARIA SOUZA", "01/2020", "10,00"])
+
+    preview = build_preview(
+        cadastro,
+        history_workbook=historico,
+        limit=None,
+        execution_mode=ExecutionMode.CORRIGIR_HISTORICO,
+    )
+
+    assert len(preview.valid_records) == 1
+    assert preview.valid_records[0].cpf == ""
+    assert preview.valid_records[0].processo == "0010953-19.2017.5.03.0034"
+    assert preview.valid_records[0].historicos[0].nome == "Base"
+
+
+def test_build_preview_accepts_explicit_calculation_date_for_existing_date_fix_mode() -> None:
+    cadastro = Workbook()
+    controle = cadastro.active
+    controle.title = "Controle"
+    controle.append(["Nome", "Processo", "Data de Calculo"])
+    controle.append(["MARIA SOUZA", "0010953-19.2017.5.03.0034", "15/04/2026"])
+
+    historico = Workbook()
+    aba = historico.active
+    aba.title = "MARIA SOUZA"
+    aba.append(["Funcionario", "Periodo", "Base"])
+    aba.append(["MARIA SOUZA", "01/2020", "10,00"])
+
+    preview = build_preview(
+        cadastro,
+        history_workbook=historico,
+        limit=None,
+        execution_mode=ExecutionMode.CORRIGIR_DATAS_E_HISTORICO,
+    )
+
+    assert len(preview.valid_records) == 1
+    assert preview.valid_records[0].data_calculo == "15/04/2026"

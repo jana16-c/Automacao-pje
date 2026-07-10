@@ -33,6 +33,7 @@ class Record:
     cpf: str
     data_admissao: str | None
     data_demissao: str | None
+    data_calculo: str | None
     processo: str | None
     historicos: list[HistoricalSeries]
     source: RecordSource
@@ -68,7 +69,7 @@ class OutputLayout:
 
 @dataclass(slots=True)
 class AppPaths:
-    model_file: Path
+    model_file: Path | None
     excel_file: Path
     history_file: Path | None
     output_dir: Path

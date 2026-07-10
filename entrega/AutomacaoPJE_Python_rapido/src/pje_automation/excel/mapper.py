@@ -4,9 +4,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+import re
 
 from openpyxl.workbook.workbook import Workbook
 
+from pje_automation.domain.execution import ExecutionMode
 from pje_automation.domain.models import HistoricalSeries, HistoricalValue, Record, RecordSource, WorkbookPreview
 from pje_automation.excel.normalization import (
     normalize_competencia,
@@ -14,6 +16,7 @@ from pje_automation.excel.normalization import (
     normalize_date,
     normalize_header,
     normalize_name_key,
+    normalize_process_digits,
     normalize_registration,
     parse_decimal,
 )
@@ -25,6 +28,7 @@ MAIN_HEADER_ALIASES = {
     "cpf": {"cpf", "cpf reclamante", "documento", "documento fiscal"},
     "data_admissao": {"admissao", "data admissao", "dt admissao"},
     "data_demissao": {"demissao", "data demissao", "dt demissao", "data final"},
+    "data_calculo": {"data calculo", "dt calculo", "data de calculo", "data termino calculo"},
     "processo": {"processo", "numero processo", "numero do processo"},
     "historico_nome": {"historico nome", "historico salarial", "nome historico", "verba historico"},
 }
@@ -59,65 +63,73 @@ class ValueColumnProfile:
     two_plus_decimal_count: int = 0
 
 
-def build_preview(workbook: Workbook, history_workbook: Workbook | None = None, limit: int | None = 20) -> WorkbookPreview:
+@dataclass(slots=True)
+class PendingRecord:
+    record_id: str
+    nome: str
+    cpf: str
+    matricula: str | None
+    data_admissao: str | None
+    data_demissao: str | None
+    data_calculo: str | None
+    processo: str | None
+    historico_nome: str | None
+    source: RecordSource
+
+
+@dataclass(slots=True)
+class HistoryLookupTargets:
+    matriculas: set[str]
+    nomes: set[str]
+
+
+def build_preview(
+    workbook: Workbook,
+    history_workbook: Workbook | None = None,
+    limit: int | None = 20,
+    execution_mode: ExecutionMode = ExecutionMode.NOVO_CALCULO,
+) -> WorkbookPreview:
     valid_records: list[Record] = []
     invalid_rows: list[str] = []
     ambiguous_rows: list[str] = []
-    used_control_sheets: set[str] = set()
-    history_index, history_invalid_rows, used_history_sheets = collect_history_series(workbook, history_workbook=history_workbook)
+    pending_records, control_invalid_rows, used_control_sheets = collect_control_records(
+        workbook,
+        limit=limit,
+        execution_mode=execution_mode,
+    )
+    invalid_rows.extend(control_invalid_rows)
+
+    targets = build_history_lookup_targets(pending_records)
+    history_index, history_invalid_rows, used_history_sheets = collect_history_series(
+        workbook,
+        history_workbook=history_workbook,
+        targets=targets,
+    )
     invalid_rows.extend(history_invalid_rows)
 
-    for worksheet in workbook.worksheets:
-        mapping = detect_mapping(
-            worksheet.iter_rows(values_only=True),
-            aliases=MAIN_HEADER_ALIASES,
-            required_fields=("nome", "cpf", "data_demissao"),
-        )
-        if not mapping:
-            continue
-        used_control_sheets.add(worksheet.title)
-
-        for row_index, row in enumerate(
-            worksheet.iter_rows(min_row=mapping.header_row + 1, values_only=True),
-            start=mapping.header_row + 1,
-        ):
-            nome = to_optional_str(cell_value(row, mapping.columns.get("nome")))
-            if not nome:
-                continue
-
-            cpf = normalize_cpf(cell_value(row, mapping.columns.get("cpf")))
-            matricula = normalize_registration(cell_value(row, mapping.columns.get("matricula")))
-            data_demissao = normalize_date(cell_value(row, mapping.columns.get("data_demissao")))
-            if not cpf or not data_demissao:
-                invalid_rows.append(f"{worksheet.title}:{row_index}")
-                continue
-
-            record_id = cpf or f"{worksheet.title}-{row_index}"
-            valid_records.append(
-                Record(
-                    record_id=record_id,
-                    nome=nome,
-                    cpf=cpf,
-                    data_admissao=normalize_date(cell_value(row, mapping.columns.get("data_admissao"))),
-                    data_demissao=data_demissao,
-                    processo=to_optional_str(cell_value(row, mapping.columns.get("processo"))),
-                    historicos=resolve_historicos(
-                        cpf=cpf,
-                        matricula=matricula,
-                        nome=nome,
-                        historico_nome=to_optional_str(cell_value(row, mapping.columns.get("historico_nome"))),
-                        history_index=history_index,
-                    ),
-                    source=RecordSource(sheet=worksheet.title, row=row_index),
-                )
+    for pending in pending_records:
+        valid_records.append(
+            Record(
+                record_id=pending.record_id,
+                nome=pending.nome,
+                cpf=pending.cpf,
+                data_admissao=pending.data_admissao,
+                data_demissao=pending.data_demissao,
+                data_calculo=pending.data_calculo,
+                processo=pending.processo,
+                historicos=resolve_historicos(
+                    cpf=pending.cpf,
+                    matricula=pending.matricula,
+                    nome=pending.nome,
+                    historico_nome=pending.historico_nome,
+                    history_index=history_index,
+                ),
+                source=pending.source,
             )
-            if limit is not None and len(valid_records) >= limit:
-                break
-        if limit is not None and len(valid_records) >= limit:
-            break
+        )
 
     if not valid_records:
-        ambiguous_rows.append("Nenhuma linha elegivel foi encontrada com nome, CPF e data de demissao.")
+        ambiguous_rows.append(empty_preview_message(execution_mode))
 
     if history_workbook is None or history_workbook is workbook:
         ignored_control_sheets = sorted(sheet for sheet in workbook.sheetnames if sheet not in (used_control_sheets | used_history_sheets))
@@ -133,6 +145,171 @@ def build_preview(workbook: Workbook, history_workbook: Workbook | None = None, 
         sheet_names=workbook.sheetnames,
         ignored_control_sheets=ignored_control_sheets,
         ignored_history_sheets=ignored_history_sheets,
+    )
+
+
+def collect_control_records(
+    workbook: Workbook,
+    limit: int | None = 20,
+    execution_mode: ExecutionMode = ExecutionMode.NOVO_CALCULO,
+) -> tuple[list[PendingRecord], list[str], set[str]]:
+    pending_records: list[PendingRecord] = []
+    invalid_rows: list[str] = []
+    used_control_sheets: set[str] = set()
+
+    for worksheet in workbook.worksheets:
+        mapping = detect_control_mapping(worksheet, execution_mode=execution_mode)
+        if not mapping:
+            continue
+        used_control_sheets.add(worksheet.title)
+
+        for row_index, row in enumerate(
+            worksheet.iter_rows(min_row=max(mapping.header_row + 1, 1), values_only=True),
+            start=max(mapping.header_row + 1, 1),
+        ):
+            nome = to_optional_str(cell_value(row, mapping.columns.get("nome")))
+            if not nome:
+                continue
+
+            cpf = normalize_cpf(cell_value(row, mapping.columns.get("cpf")))
+            matricula = normalize_registration(cell_value(row, mapping.columns.get("matricula")))
+            processo = to_optional_str(cell_value(row, mapping.columns.get("processo")))
+            data_demissao = normalize_date(cell_value(row, mapping.columns.get("data_demissao")))
+            data_calculo = normalize_date(cell_value(row, mapping.columns.get("data_calculo")))
+            if not is_control_row_valid(
+                execution_mode,
+                cpf=cpf,
+                processo=processo,
+                data_demissao=data_demissao,
+                data_calculo=data_calculo,
+            ):
+                invalid_rows.append(f"{worksheet.title}:{row_index}")
+                continue
+
+            record_id = build_record_id(
+                execution_mode,
+                cpf=cpf,
+                nome=nome,
+                processo=processo,
+                worksheet_title=worksheet.title,
+                row_index=row_index,
+            )
+            pending_records.append(
+                PendingRecord(
+                    record_id=record_id,
+                    nome=nome,
+                    cpf=cpf,
+                    matricula=matricula,
+                    data_admissao=normalize_date(cell_value(row, mapping.columns.get("data_admissao"))),
+                    data_demissao=data_demissao,
+                    data_calculo=data_calculo,
+                    processo=processo,
+                    historico_nome=to_optional_str(cell_value(row, mapping.columns.get("historico_nome"))),
+                    source=RecordSource(sheet=worksheet.title, row=row_index),
+                )
+            )
+            if limit is not None and len(pending_records) >= limit:
+                return pending_records, invalid_rows, used_control_sheets
+    return pending_records, invalid_rows, used_control_sheets
+
+
+def detect_control_mapping(worksheet, execution_mode: ExecutionMode = ExecutionMode.NOVO_CALCULO) -> SheetMapping | None:
+    mapping = detect_mapping(
+        worksheet.iter_rows(values_only=True),
+        aliases=MAIN_HEADER_ALIASES,
+        required_fields=control_required_fields(execution_mode),
+    )
+    if mapping:
+        return mapping
+    if execution_mode == ExecutionMode.NOVO_CALCULO:
+        return infer_headerless_control_mapping(worksheet)
+    return None
+
+
+def infer_headerless_control_mapping(worksheet) -> SheetMapping | None:
+    for row in worksheet.iter_rows(min_row=1, max_row=5, values_only=True):
+        if not row:
+            continue
+        matricula = normalize_registration(cell_value(row, 0))
+        nome = to_optional_str(cell_value(row, 1))
+        cpf = normalize_cpf(cell_value(row, 2))
+        demissao_index = None
+        admissao_index = None
+        fourth_date = normalize_date(cell_value(row, 3)) if looks_like_control_date(cell_value(row, 3)) else None
+        fifth_date = normalize_date(cell_value(row, 4)) if looks_like_control_date(cell_value(row, 4)) else None
+        if fourth_date and fifth_date:
+            admissao_index = 3
+            demissao_index = 4
+        elif fifth_date:
+            admissao_index = 3 if cell_value(row, 3) is not None else None
+            demissao_index = 4
+        elif fourth_date:
+            demissao_index = 3
+        if matricula and nome and cpf and demissao_index is not None:
+            columns = {
+                "matricula": 0,
+                "nome": 1,
+                "cpf": 2,
+                "data_demissao": demissao_index,
+            }
+            if admissao_index is not None:
+                columns["data_admissao"] = admissao_index
+            return SheetMapping(header_row=0, columns=columns)
+    return None
+
+
+def control_required_fields(execution_mode: ExecutionMode) -> tuple[str, ...]:
+    if execution_mode == ExecutionMode.NOVO_CALCULO:
+        return ("nome", "cpf", "data_demissao")
+    return ("nome", "processo")
+
+
+def is_control_row_valid(
+    execution_mode: ExecutionMode,
+    *,
+    cpf: str,
+    processo: str | None,
+    data_demissao: str | None,
+    data_calculo: str | None,
+) -> bool:
+    if execution_mode == ExecutionMode.NOVO_CALCULO:
+        return bool(cpf and data_demissao)
+    if not processo:
+        return False
+    if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO:
+        return bool(data_demissao or data_calculo)
+    return True
+
+
+def build_record_id(
+    execution_mode: ExecutionMode,
+    *,
+    cpf: str,
+    nome: str,
+    processo: str | None,
+    worksheet_title: str,
+    row_index: int,
+) -> str:
+    if execution_mode == ExecutionMode.NOVO_CALCULO and cpf:
+        return cpf
+    process_digits = normalize_process_digits(processo)
+    if process_digits:
+        return f"{process_digits}-{normalize_name_key(nome)}"
+    return f"{worksheet_title}-{row_index}"
+
+
+def empty_preview_message(execution_mode: ExecutionMode) -> str:
+    if execution_mode == ExecutionMode.CORRIGIR_HISTORICO:
+        return "Nenhuma linha elegivel foi encontrada com nome e processo para corrigir o historico."
+    if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO:
+        return "Nenhuma linha elegivel foi encontrada com nome, processo e ao menos uma data para corrigir."
+    return "Nenhuma linha elegivel foi encontrada com nome, CPF e data de demissao."
+
+
+def build_history_lookup_targets(records: list[PendingRecord]) -> HistoryLookupTargets:
+    return HistoryLookupTargets(
+        matriculas={record.matricula for record in records if record.matricula},
+        nomes={normalize_name_key(record.nome) for record in records if record.nome},
     )
 
 
@@ -157,16 +334,20 @@ def detect_mapping(
     return None
 
 
-def collect_history_series(workbook: Workbook, history_workbook: Workbook | None = None) -> tuple[HistoryIndex, list[str], set[str]]:
+def collect_history_series(
+    workbook: Workbook,
+    history_workbook: Workbook | None = None,
+    targets: HistoryLookupTargets | None = None,
+) -> tuple[HistoryIndex, list[str], set[str]]:
     history_index = HistoryIndex(by_cpf={}, by_matricula={}, by_nome={})
     invalid_rows: list[str] = []
     used_sheets: set[str] = set()
 
     for source_workbook in history_sources(workbook, history_workbook):
-        structured_invalid_rows, structured_used_sheets = collect_structured_history_series(source_workbook, history_index)
+        structured_invalid_rows, structured_used_sheets = collect_structured_history_series(source_workbook, history_index, targets=targets)
         invalid_rows.extend(structured_invalid_rows)
         used_sheets.update(structured_used_sheets)
-        companion_invalid_rows, companion_used_sheets = collect_companion_history_series(source_workbook, history_index)
+        companion_invalid_rows, companion_used_sheets = collect_companion_history_series(source_workbook, history_index, targets=targets)
         invalid_rows.extend(companion_invalid_rows)
         used_sheets.update(companion_used_sheets)
 
@@ -174,14 +355,20 @@ def collect_history_series(workbook: Workbook, history_workbook: Workbook | None
     return history_index, invalid_rows, used_sheets
 
 
-def collect_structured_history_series(workbook: Workbook, history_index: HistoryIndex) -> tuple[list[str], set[str]]:
+def collect_structured_history_series(
+    workbook: Workbook,
+    history_index: HistoryIndex,
+    targets: HistoryLookupTargets | None = None,
+) -> tuple[list[str], set[str]]:
     invalid_rows: list[str] = []
     used_sheets: set[str] = set()
     for worksheet in workbook.worksheets:
+        if should_skip_history_sheet_by_title(workbook, worksheet.title, targets):
+            continue
         mapping = detect_mapping(
             worksheet.iter_rows(values_only=True),
             aliases=HISTORY_HEADER_ALIASES,
-            required_fields=("cpf", "historico_nome", "competencia", "valor"),
+            required_fields=("historico_nome", "competencia", "valor"),
         )
         if not mapping:
             continue
@@ -192,14 +379,18 @@ def collect_structured_history_series(workbook: Workbook, history_index: History
             start=mapping.header_row + 1,
         ):
             cpf = normalize_cpf(cell_value(row, mapping.columns.get("cpf")))
+            matricula = normalize_registration(cell_value(row, mapping.columns.get("matricula")))
+            nome = to_optional_str(cell_value(row, mapping.columns.get("nome")))
             historico_nome = to_optional_str(cell_value(row, mapping.columns.get("historico_nome")))
             competencia = normalize_competencia(cell_value(row, mapping.columns.get("competencia")))
             raw_valor = cell_value(row, mapping.columns.get("valor"))
 
-            if not any((cpf, historico_nome, competencia, raw_valor)):
+            if not any((cpf, matricula, nome, historico_nome, competencia, raw_valor)):
                 continue
-            if not cpf or not historico_nome or not competencia:
+            if not historico_nome or not competencia or not any((matricula, nome, cpf)):
                 invalid_rows.append(f"{worksheet.title}:{row_index}")
+                continue
+            if targets and not matches_history_target(targets, matricula=matricula, nome=nome):
                 continue
             if not has_meaningful_history_value(raw_valor):
                 continue
@@ -210,15 +401,26 @@ def collect_structured_history_series(workbook: Workbook, history_index: History
                 invalid_rows.append(f"{worksheet.title}:{row_index}")
                 continue
 
-            add_history_value(history_index.by_cpf, cpf, historico_nome, competencia, valor)
+            if matricula:
+                add_history_value(history_index.by_matricula, matricula, historico_nome, competencia, valor)
+            if nome:
+                add_history_value(history_index.by_nome, normalize_name_key(nome), historico_nome, competencia, valor)
+            if cpf:
+                add_history_value(history_index.by_cpf, cpf, historico_nome, competencia, valor)
 
     return invalid_rows, used_sheets
 
 
-def collect_companion_history_series(workbook: Workbook, history_index: HistoryIndex) -> tuple[list[str], set[str]]:
+def collect_companion_history_series(
+    workbook: Workbook,
+    history_index: HistoryIndex,
+    targets: HistoryLookupTargets | None = None,
+) -> tuple[list[str], set[str]]:
     invalid_rows: list[str] = []
     used_sheets: set[str] = set()
     for worksheet in workbook.worksheets:
+        if should_skip_history_sheet_by_title(workbook, worksheet.title, targets):
+            continue
         mapping = detect_mapping(
             worksheet.iter_rows(values_only=True),
             aliases=HISTORY_HEADER_ALIASES,
@@ -242,6 +444,8 @@ def collect_companion_history_series(workbook: Workbook, history_index: HistoryI
         profiles = build_value_column_profiles(worksheet, mapping.header_row, value_columns)
         sheet_matricula = sheet_registration_hint(worksheet, mapping)
         sheet_nome = sheet_name_hint(worksheet, mapping)
+        if targets and not matches_history_target(targets, matricula=sheet_matricula, nome=sheet_nome):
+            continue
 
         for row_index, row in enumerate(
             worksheet.iter_rows(min_row=mapping.header_row + 1, values_only=False),
@@ -295,8 +499,8 @@ def resolve_historicos(
     historico_nome: str | None,
     history_index: HistoryIndex,
 ) -> list[HistoricalSeries]:
-    series_by_name = history_index.by_cpf.get(cpf, {})
-    if not series_by_name and matricula:
+    series_by_name: dict[str, HistoricalSeries] = {}
+    if matricula:
         series_by_name = history_index.by_matricula.get(matricula, {})
     if not series_by_name and nome:
         series_by_name = history_index.by_nome.get(normalize_name_key(nome), {})
@@ -336,6 +540,36 @@ def sheet_name_hint(worksheet, mapping: SheetMapping) -> str | None:
     if not title or normalize_name_key(title).startswith("PLANILHA"):
         return None
     return title
+
+
+def matches_history_target(targets: HistoryLookupTargets, matricula: str | None, nome: str | None) -> bool:
+    if matricula and matricula in targets.matriculas:
+        return True
+    if nome and normalize_name_key(nome) in targets.nomes:
+        return True
+    return False
+
+
+def should_skip_history_sheet_by_title(workbook: Workbook, title: str, targets: HistoryLookupTargets | None) -> bool:
+    if targets is None or len(workbook.sheetnames) < 100:
+        return False
+    normalized_title = normalize_name_key(title or "")
+    if not normalized_title:
+        return False
+    if normalized_title.startswith("PLANILHA") or normalized_title.startswith("HISTORICO") or normalized_title.startswith("RESUMO"):
+        return False
+    return normalized_title not in targets.nomes
+
+
+def looks_like_control_date(value: object) -> bool:
+    if value in (None, ""):
+        return False
+    if isinstance(value, datetime):
+        return True
+    if isinstance(value, (int, float)):
+        return True
+    text = str(value).strip()
+    return bool(re.fullmatch(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", text))
 
 
 def sort_history_values(history_index: HistoryIndex) -> None:

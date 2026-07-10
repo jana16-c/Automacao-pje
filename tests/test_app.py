@@ -27,6 +27,7 @@ def build_application() -> Application:
                     "overwrite_valid_outputs": False,
                     "cooldown_every_records": 5,
                     "cooldown_seconds": 120,
+                    "failed_record_revisit_rounds": 1,
                     "record_watchdog_timeout_seconds": 240,
                     "watchdog_poll_seconds": 5,
                 }
@@ -53,6 +54,7 @@ def build_record(record_id: str, has_history: bool) -> Record:
         cpf=record_id.zfill(11),
         data_admissao=None,
         data_demissao="01/01/2020",
+        data_calculo=None,
         processo=None,
         historicos=historicos,
         source=RecordSource(sheet="Controle", row=2),
@@ -167,6 +169,12 @@ def test_record_watchdog_timeout_seconds_reads_execution_config() -> None:
     assert app._record_watchdog_timeout_seconds() == 240
 
 
+def test_failed_record_revisit_rounds_reads_execution_config() -> None:
+    app = build_application()
+
+    assert app._failed_record_revisit_rounds() == 1
+
+
 def test_should_retry_workflow_accepts_timeout_exception() -> None:
     app = build_application()
 
@@ -182,7 +190,7 @@ def test_select_records_for_execution_prefers_history_matches() -> None:
         sheet_names=["Controle"],
     )
 
-    selected = app._select_records_for_execution(preview, history_file_provided=True, apply_test_mode_limit=False)
+    selected = app._select_records_for_execution(preview, history_required=True, apply_test_mode_limit=False)
 
     assert [record.record_id for record in selected] == ["2"]
 
@@ -197,7 +205,7 @@ def test_select_records_for_execution_raises_when_history_file_has_no_match() ->
     )
 
     try:
-        app._select_records_for_execution(preview, history_file_provided=True, apply_test_mode_limit=False)
+        app._select_records_for_execution(preview, history_required=True, apply_test_mode_limit=False)
     except ValueError as exc:
         assert "historico salarial" in str(exc)
     else:
@@ -214,9 +222,23 @@ def test_select_records_for_execution_honors_test_mode_limit() -> None:
         sheet_names=["Controle"],
     )
 
-    selected = app._select_records_for_execution(preview, history_file_provided=True, apply_test_mode_limit=True)
+    selected = app._select_records_for_execution(preview, history_required=True, apply_test_mode_limit=True)
 
     assert [record.record_id for record in selected] == ["1"]
+
+
+def test_select_records_for_execution_keeps_records_without_history_in_import_mode() -> None:
+    app = build_application()
+    preview = WorkbookPreview(
+        valid_records=[build_record("1", False), build_record("2", False)],
+        invalid_rows=[],
+        ambiguous_rows=[],
+        sheet_names=["Controle"],
+    )
+
+    selected = app._select_records_for_execution(preview, history_required=False, apply_test_mode_limit=False)
+
+    assert [record.record_id for record in selected] == ["1", "2"]
 
 
 def test_build_execution_plan_skips_completed_record_with_outputs(tmp_path) -> None:
@@ -294,6 +316,28 @@ def test_resume_state_from_job_prefers_checkpoint_state() -> None:
     )
 
     assert app._resume_state_from_job(job) == JobState.PREENCHENDO_HISTORICO
+
+
+def test_build_revisit_plan_uses_latest_resume_state_from_failed_jobs() -> None:
+    app = build_application()
+    record = build_record("32806201551", True)
+    failed = [
+        (
+            record,
+            WorkflowExecutionError("PJE_SERVER_ERROR", "falhou"),
+            JobRecord(
+                record_id=record.record_id,
+                nome=record.nome,
+                cpf_masked="***",
+                state=JobState.ERRO,
+                updated_at=datetime.now(),
+                resume_state=JobState.PREENCHENDO_HISTORICO,
+            ),
+            None,
+        )
+    ]
+
+    assert app._build_revisit_plan(failed) == [(record, JobState.PREENCHENDO_HISTORICO)]
 
 
 def test_request_stop_marks_application_as_cancelled() -> None:

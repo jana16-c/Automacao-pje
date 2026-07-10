@@ -13,9 +13,10 @@ from selenium.common.exceptions import NoAlertPresentException
 from selenium.webdriver.common.by import By
 
 from pje_automation.diagnostics.evidence import save_evidence
+from pje_automation.domain.execution import ExecutionMode
 from pje_automation.domain.errors import AutomationCancelledError, AutomationError, WorkflowExecutionError
 from pje_automation.domain.models import HistoricalSeries, Record
-from pje_automation.excel.normalization import normalize_cpf, normalize_name_key
+from pje_automation.excel.normalization import normalize_cpf, normalize_name_key, normalize_process_digits
 from pje_automation.domain.states import JobState
 from pje_automation.persistence.repository import JobRepository
 from pje_automation.pje.browser import BrowserManager
@@ -48,18 +49,19 @@ class Workflow:
     def run_single_record(
         self,
         record: Record,
-        model_path: Path,
+        model_path: Path | None,
         pdf_dir: Path,
         pjc_dir: Path,
         evidence_dir: Path,
         resume_recent: bool = False,
         resume_state: JobState | None = None,
+        execution_mode: ExecutionMode = ExecutionMode.NOVO_CALCULO,
     ) -> None:
         self._ensure_not_cancelled()
         self._mark_progress(record, JobState.VALIDANDO_DADOS)
         with TemporaryDirectory(prefix=f"pje_run_{record.record_id}_") as temp_download_dir:
             temp_dir = Path(temp_download_dir)
-            staged_model = self._stage_model_for_browser(model_path, temp_dir)
+            staged_model = self._stage_model_for_browser(model_path, temp_dir) if model_path is not None else None
             driver = self.browser_manager.open_driver(download_dir=temp_dir)
             if self.register_driver is not None:
                 self.register_driver(driver)
@@ -70,22 +72,40 @@ class Workflow:
                 can_resume_recent = resume_recent and self._can_resume_recent(resume_state)
                 if can_resume_recent and self.logger is not None and resume_state is not None:
                     self.logger.info("Retomando registro %s a partir de %s.", record.record_id, resume_state.value)
-                self._start_or_resume_calculation(driver, staged_model, record, resume_recent=can_resume_recent)
-                self._ensure_not_cancelled()
-                if resume_phase <= 0:
-                    self._fill_identity(driver, record)
-                self._ensure_not_cancelled()
-                if resume_phase <= 1:
-                    self._refresh_verbas(driver, record)
-                self._ensure_not_cancelled()
-                if resume_phase <= 2:
-                    self._refresh_fgts(driver, record)
-                self._ensure_not_cancelled()
-                if resume_phase <= 3:
-                    self._refresh_contribuicao_social(driver, record)
-                self._ensure_not_cancelled()
-                if resume_phase <= 4:
-                    self._process_historico(driver, record)
+                if execution_mode == ExecutionMode.NOVO_CALCULO:
+                    self._start_or_resume_calculation(driver, staged_model, record, resume_recent=can_resume_recent)
+                    self._ensure_not_cancelled()
+                    if resume_phase <= 0:
+                        self._fill_identity(driver, record)
+                    self._ensure_not_cancelled()
+                    if resume_phase <= 1:
+                        self._refresh_verbas(driver, record)
+                    self._ensure_not_cancelled()
+                    if resume_phase <= 2:
+                        self._refresh_fgts(driver, record)
+                    self._ensure_not_cancelled()
+                    if resume_phase <= 3:
+                        self._refresh_contribuicao_social(driver, record)
+                    self._ensure_not_cancelled()
+                    if resume_phase <= 4:
+                        self._process_historico(driver, record)
+                else:
+                    self._open_existing_calculation_from_search(driver, record)
+                    self._ensure_not_cancelled()
+                    if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO and resume_phase <= 0:
+                        self._update_calculation_dates(driver, record)
+                    self._ensure_not_cancelled()
+                    if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO and resume_phase <= 1:
+                        self._refresh_verbas(driver, record)
+                    self._ensure_not_cancelled()
+                    if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO and resume_phase <= 2:
+                        self._refresh_fgts(driver, record)
+                    self._ensure_not_cancelled()
+                    if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO and resume_phase <= 3:
+                        self._refresh_contribuicao_social(driver, record)
+                    self._ensure_not_cancelled()
+                    if resume_phase <= 4:
+                        self._process_historico(driver, record)
                 self._ensure_not_cancelled()
                 if resume_phase <= 5:
                     self._liquidate_and_export(driver, record, pdf_dir, pjc_dir)
@@ -169,7 +189,7 @@ class Workflow:
             JobState.VALIDANDO_SAIDAS,
         }
 
-    def _start_or_resume_calculation(self, driver, model_path: Path, record: Record, resume_recent: bool) -> None:
+    def _start_or_resume_calculation(self, driver, model_path: Path | None, record: Record, resume_recent: bool) -> None:
         if resume_recent:
             if self._open_recent_calculation(driver, record):
                 return
@@ -177,6 +197,8 @@ class Workflow:
                 "RECENT_CALC_NOT_FOUND",
                 f"Nao foi possivel localizar o calculo recente de {record.nome}; a automacao nao importou outro modelo.",
             )
+        if model_path is None:
+            raise WorkflowExecutionError("MODEL_REQUIRED", "O modelo .pjc e obrigatorio para importar um novo calculo.")
         self._import_model(driver, model_path, record)
 
     def _open_recent_calculation(self, driver, record: Record) -> bool:
@@ -280,6 +302,137 @@ class Workflow:
             return False
         return False
 
+    def _open_existing_calculation_from_search(self, driver, record: Record) -> None:
+        self._open_search_page(driver)
+        self._fill_existing_calculation_search(driver, record)
+        self._click_required(driver, "buscar.buscar")
+        self._wait_for_search_results(driver)
+        self._open_search_result(driver, record)
+        if not self._calculation_form_available(driver, timeout=self._operation_timeout_seconds()):
+            raise WorkflowExecutionError(
+                "CALCULO_BUSCA_NAO_ABRIU",
+                f"O PJe localizou {record.nome}, mas nao abriu o calculo para edicao.",
+            )
+
+    def _open_search_page(self, driver) -> None:
+        for selector_key in ("home.buscar_calculo", "probe.menu.buscar"):
+            try:
+                self._click_required(driver, selector_key, url_fragment="calculo.jsf")
+                return
+            except Exception:
+                continue
+        raise WorkflowExecutionError("SELECTOR_NOT_FOUND", "Nao foi possivel abrir a tela Buscar Cálculo.")
+
+    def _fill_existing_calculation_search(self, driver, record: Record) -> None:
+        process_parts = self._parse_process_search_parts(record.processo)
+        field_values = {
+            "buscar.numero_processo": process_parts.get("numero"),
+            "buscar.digito_processo": process_parts.get("digito"),
+            "buscar.ano_processo": process_parts.get("ano"),
+            "buscar.justica_processo": process_parts.get("justica"),
+            "buscar.regiao_processo": process_parts.get("regiao"),
+            "buscar.vara_processo": process_parts.get("vara"),
+            "buscar.reclamante": record.nome,
+        }
+        for selector_key, value in field_values.items():
+            if not value:
+                continue
+            self._fill_first_available(driver, selector_key, value)
+
+    def _parse_process_search_parts(self, processo: str | None) -> dict[str, str]:
+        digits = normalize_process_digits(processo)
+        if len(digits) < 7:
+            return {}
+
+        parts = {"numero": digits[:7]}
+        if len(digits) >= 9:
+            parts["digito"] = digits[7:9]
+        if len(digits) >= 13:
+            parts["ano"] = digits[9:13]
+        if len(digits) >= 14:
+            parts["justica"] = digits[13:14]
+        if len(digits) >= 16:
+            parts["regiao"] = digits[14:16]
+        if len(digits) >= 20:
+            parts["vara"] = digits[16:20]
+        elif len(digits) > 16:
+            parts["vara"] = digits[-4:]
+        return parts
+
+    def _wait_for_search_results(self, driver) -> None:
+        def _results_ready(current_driver) -> bool:
+            return bool(
+                current_driver.execute_script(
+                    """
+                    const text = (document.body.innerText || document.body.textContent || '')
+                      .normalize('NFD')
+                      .replace(/[\\u0300-\\u036f]/g, '')
+                      .replace(/\\s+/g, ' ')
+                      .toUpperCase();
+                    const hasRows = !!document.querySelector("[id^='formulario:listagem:'][id$=':j_id607']");
+                    return hasRows || text.includes('REGISTROS ENCONTRADOS:');
+                    """
+                )
+            )
+
+        wait_for_condition(driver, _results_ready, timeout=self._operation_timeout_seconds())
+        self._wait_for_idle(driver)
+
+    def _open_search_result(self, driver, record: Record) -> None:
+        target_name = normalize_name_key(record.nome)
+        target_process = normalize_process_digits(record.processo)
+        result = driver.execute_script(
+            """
+            const targetName = arguments[0];
+            const targetProcess = arguments[1];
+            const normalize = (value) => (value || '')
+              .normalize('NFD')
+              .replace(/[\\u0300-\\u036f]/g, '')
+              .replace(/\\s+/g, ' ')
+              .trim()
+              .toUpperCase();
+            const digitsOnly = (value) => (value || '').replace(/\\D+/g, '');
+            const openLinks = Array.from(document.querySelectorAll("a[id^='formulario:listagem:'][title='Abrir']"));
+            const rows = openLinks.map((link) => {
+              const row = link.closest('tr');
+              const text = row ? (row.innerText || row.textContent || '') : '';
+              return {
+                id: link.id,
+                text: text.trim(),
+                normalizedText: normalize(text),
+                digits: digitsOnly(text),
+              };
+            });
+
+            const matched = rows.find((row) => {
+              const nameOk = !targetName || row.normalizedText.includes(targetName);
+              const processOk = !targetProcess || row.digits.includes(targetProcess);
+              return nameOk && processOk;
+            });
+
+            if (matched) {
+              const link = document.getElementById(matched.id);
+              if (link) {
+                link.click();
+                return { clicked: true, text: matched.text, total: rows.length };
+              }
+            }
+
+            return { clicked: false, total: rows.length, sample: rows.slice(0, 3).map((row) => row.text) };
+            """,
+            target_name,
+            target_process,
+        )
+        if result and result.get("clicked"):
+            self._wait_for_idle(driver)
+            return
+
+        sample = ", ".join((result or {}).get("sample", []))
+        raise WorkflowExecutionError(
+            "CALCULO_BUSCA_NAO_ENCONTRADO",
+            f"Nao foi possivel localizar o calculo de {record.nome} na busca. Processo={record.processo or ''} Amostra={sample}",
+        )
+
     def _stage_model_for_browser(self, model_path: Path, staging_dir: Path) -> Path:
         staged = staging_dir / "modelo_importacao.pjc"
         shutil.copyfile(model_path, staged)
@@ -326,16 +479,7 @@ class Workflow:
         self._mark_progress(record, JobState.SALVANDO_PARAMETROS)
         self._click_required(driver, "calculo.salvar")
         self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
-        if record.data_demissao:
-            self._open_parameters_tab(driver)
-            self._fill_field_if_needed(driver, "calculo.data_demissao", record.data_demissao)
-            self._wait_for_field_value(driver, "calculo.data_demissao", record.data_demissao)
-            self._fill_field_if_needed(driver, "calculo.data_final", record.data_demissao)
-            self._wait_for_field_value(driver, "calculo.data_final", record.data_demissao)
-            self._wait_for_idle(driver)
-            self._mark_progress(record, JobState.SALVANDO_PARAMETROS)
-            self._click_required(driver, "calculo.salvar")
-            self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
+        self._update_calculation_dates(driver, record)
 
     def _ensure_cpf_selected(self, driver) -> None:
         for locator in self.selectors.get("calculo.cpf_tipo_cpf"):
@@ -348,6 +492,27 @@ class Workflow:
                 continue
         raise WorkflowExecutionError("SELECTOR_NOT_FOUND", "Nao foi possivel marcar o tipo de documento CPF.")
 
+    def _update_calculation_dates(self, driver, record: Record) -> None:
+        target_data_final = record.data_calculo or record.data_demissao
+        if not record.data_demissao and not target_data_final:
+            return
+
+        self._open_parameters_tab(driver)
+        changed = False
+        if record.data_demissao:
+            changed = self._fill_field_if_needed(driver, "calculo.data_demissao", record.data_demissao) or changed
+            self._wait_for_field_value(driver, "calculo.data_demissao", record.data_demissao)
+        if target_data_final:
+            changed = self._fill_field_if_needed(driver, "calculo.data_final", target_data_final) or changed
+            self._wait_for_field_value(driver, "calculo.data_final", target_data_final)
+        if not changed:
+            return
+
+        self._wait_for_idle(driver)
+        self._mark_progress(record, JobState.SALVANDO_PARAMETROS)
+        self._click_required(driver, "calculo.salvar")
+        self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
+
     def _fill_first_available(self, driver, selector_key: str, value: str) -> None:
         for locator in self.selectors.get(selector_key):
             try:
@@ -358,11 +523,12 @@ class Workflow:
                 continue
         raise WorkflowExecutionError("SELECTOR_NOT_FOUND", f"Nao foi possivel preencher {selector_key}.")
 
-    def _fill_field_if_needed(self, driver, selector_key: str, value: str) -> None:
+    def _fill_field_if_needed(self, driver, selector_key: str, value: str) -> bool:
         current_value = self._get_first_field_value(driver, selector_key)
         if current_value == value:
-            return
+            return False
         self._fill_first_available(driver, selector_key, value)
+        return True
 
     def _get_first_field_value(self, driver, selector_key: str) -> str:
         for locator in self.selectors.get(selector_key):
