@@ -10,6 +10,9 @@ from pje_automation.domain.models import WorkbookPreview
 from pje_automation.gui.progress_view import ProgressView
 
 
+DEFAULT_FIXED_PROCESS = "0010953-19.2017.5.03.0034"
+
+
 class MainWindow(tk.Tk):
     def __init__(self, app_controller) -> None:
         super().__init__()
@@ -22,6 +25,7 @@ class MainWindow(tk.Tk):
         self.excel_var = tk.StringVar()
         self.history_var = tk.StringVar()
         self.output_var = tk.StringVar()
+        self.fixed_process_var = tk.StringVar(value=DEFAULT_FIXED_PROCESS)
         self.preview_var = tk.StringVar(value="Nenhuma validacao executada.")
         self._mvp_thread: threading.Thread | None = None
 
@@ -50,10 +54,12 @@ class MainWindow(tk.Tk):
 
         self._path_row(frame, 2, "Excel de cadastro", self.excel_var, self._pick_excel)
         self._path_row(frame, 3, "Excel de historico (opcional)", self.history_var, self._pick_history)
-        self._path_row(frame, 4, "Pasta de saida", self.output_var, self._pick_output)
+        ttk.Label(frame, text="Processo fixo (opcional)").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Entry(frame, textvariable=self.fixed_process_var, width=72).grid(row=4, column=1, sticky="ew", padx=8)
+        self._path_row(frame, 5, "Pasta de saida", self.output_var, self._pick_output)
 
         actions = ttk.Frame(frame)
-        actions.grid(row=5, column=0, columnspan=3, sticky="w", pady=(12, 12))
+        actions.grid(row=6, column=0, columnspan=3, sticky="w", pady=(12, 12))
         self.validate_button = ttk.Button(actions, text="Validar", command=self._validate)
         self.validate_button.pack(side="left")
         self.probe_button = ttk.Button(actions, text="Mapear PJe", command=self._probe)
@@ -64,11 +70,11 @@ class MainWindow(tk.Tk):
         self.stop_button.pack(side="left", padx=(8, 0))
 
         self.progress = ProgressView(frame)
-        self.progress.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(0, 12))
+        self.progress.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(0, 12))
 
-        ttk.Label(frame, text="Preview").grid(row=7, column=0, sticky="w")
+        ttk.Label(frame, text="Preview").grid(row=8, column=0, sticky="w")
         self.preview_box = tk.Text(frame, height=18, width=96)
-        self.preview_box.grid(row=8, column=0, columnspan=3, sticky="nsew")
+        self.preview_box.grid(row=9, column=0, columnspan=3, sticky="nsew")
 
         for column in range(3):
             frame.columnconfigure(column, weight=1)
@@ -120,6 +126,7 @@ class MainWindow(tk.Tk):
                 Path(self.output_var.get()),
                 Path(self.history_var.get()) if self.history_var.get() else None,
                 execution_mode=self._execution_mode(),
+                fixed_process=self.fixed_process_var.get().strip() or None,
             )
         except Exception as exc:
             self.progress.set_status("Falha na validacao.", str(exc))
@@ -160,6 +167,7 @@ class MainWindow(tk.Tk):
                 Path(self.output_var.get()),
                 Path(self.history_var.get()) if self.history_var.get() else None,
                 execution_mode=self._execution_mode(),
+                fixed_process=self.fixed_process_var.get().strip() or None,
             )
         except Exception as exc:
             self.after(0, lambda exc=exc: self._finish_mvp_error(exc))

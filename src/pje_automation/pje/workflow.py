@@ -404,11 +404,20 @@ class Workflow:
               };
             });
 
-            const matched = rows.find((row) => {
-              const nameOk = !targetName || row.normalizedText.includes(targetName);
-              const processOk = !targetProcess || row.digits.includes(targetProcess);
-              return nameOk && processOk;
-            });
+            const exactNameRows = rows.filter((row) => row.normalizedText.includes(targetName));
+            const exactProcessRows = targetProcess ? exactNameRows.filter((row) => row.digits.includes(targetProcess)) : exactNameRows;
+
+            if (!targetProcess && exactNameRows.length > 1) {
+              return {
+                clicked: false,
+                ambiguous: true,
+                total: rows.length,
+                exactNameMatches: exactNameRows.length,
+                sample: exactNameRows.slice(0, 3).map((row) => row.text),
+              };
+            }
+
+            const matched = exactProcessRows[0];
 
             if (matched) {
               const link = document.getElementById(matched.id);
@@ -428,6 +437,11 @@ class Workflow:
             return
 
         sample = ", ".join((result or {}).get("sample", []))
+        if result and result.get("ambiguous"):
+            raise WorkflowExecutionError(
+                "CALCULO_BUSCA_AMBIGUA",
+                f"A busca por nome retornou mais de um calculo para {record.nome}. Informe o numero do processo na planilha. Amostra={sample}",
+            )
         raise WorkflowExecutionError(
             "CALCULO_BUSCA_NAO_ENCONTRADO",
             f"Nao foi possivel localizar o calculo de {record.nome} na busca. Processo={record.processo or ''} Amostra={sample}",
@@ -924,8 +938,10 @@ class Workflow:
 
     def _run_liquidation(self, driver) -> None:
         self._click_required(driver, "menu.liquidar", url_fragment="liquidacao.jsf")
+        self._timed_pause(self._liquidation_menu_settle_seconds(), "LIQUIDACAO_MENU")
         self._click_required(driver, "liquidar.executar")
-        self._wait_for_success_feedback(driver, timeout=self._operation_timeout_seconds())
+        self._timed_pause(self._liquidation_execute_settle_seconds(), "LIQUIDACAO_EXECUTAR")
+        self._wait_for_success_feedback(driver, timeout=self._liquidation_timeout_seconds())
 
     def _open_print_page_ready(self, driver) -> None:
         self._click_required(driver, "menu.imprimir", url_fragment="relatorio-calculo.jsf")
@@ -1397,6 +1413,15 @@ class Workflow:
     def _history_validation_enabled(self) -> bool:
         return bool(self.browser_manager.config.get("history_paste", {}).get("validate_first_last_and_count", True))
 
+    def _liquidation_timeout_seconds(self) -> int:
+        return int(self.browser_manager.config.get("execution", {}).get("liquidation_timeout_seconds", 300))
+
+    def _liquidation_menu_settle_seconds(self) -> float:
+        return max(0.0, float(self.browser_manager.config.get("execution", {}).get("liquidation_menu_settle_seconds", 1.0)))
+
+    def _liquidation_execute_settle_seconds(self) -> float:
+        return max(0.0, float(self.browser_manager.config.get("execution", {}).get("liquidation_execute_settle_seconds", 2.0)))
+
     def _idle_alert_timeout_seconds(self) -> float:
         return float(self.browser_manager.config.get("execution", {}).get("idle_alert_timeout_seconds", 0.15))
 
@@ -1409,6 +1434,15 @@ class Workflow:
         delay_ms = int(self.browser_manager.config.get("execution", {}).get("step_delay_ms", 0))
         if delay_ms > 0:
             sleep(delay_ms / 1000)
+
+    def _timed_pause(self, seconds: float, context: str) -> None:
+        remaining = max(float(seconds), 0.0)
+        while remaining > 0:
+            self._beat(context)
+            self._ensure_not_cancelled()
+            interval = min(0.1, remaining)
+            sleep(interval)
+            remaining -= interval
 
     def _ensure_not_cancelled(self) -> None:
         if callable(self.should_cancel) and self.should_cancel():

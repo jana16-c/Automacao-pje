@@ -258,8 +258,7 @@ def test_build_preview_allows_existing_history_correction_without_cpf() -> None:
     cadastro = Workbook()
     controle = cadastro.active
     controle.title = "Controle"
-    controle.append(["Nome", "Processo"])
-    controle.append(["MARIA SOUZA", "0010953-19.2017.5.03.0034"])
+    controle.append(["1001", "MARIA SOUZA", None, "15/04/2026", "ok"])
 
     historico = Workbook()
     aba = historico.active
@@ -276,7 +275,8 @@ def test_build_preview_allows_existing_history_correction_without_cpf() -> None:
 
     assert len(preview.valid_records) == 1
     assert preview.valid_records[0].cpf == ""
-    assert preview.valid_records[0].processo == "0010953-19.2017.5.03.0034"
+    assert preview.valid_records[0].processo is None
+    assert preview.valid_records[0].data_demissao == "15/04/2026"
     assert preview.valid_records[0].historicos[0].nome == "Base"
 
 
@@ -284,8 +284,7 @@ def test_build_preview_accepts_explicit_calculation_date_for_existing_date_fix_m
     cadastro = Workbook()
     controle = cadastro.active
     controle.title = "Controle"
-    controle.append(["Nome", "Processo", "Data de Calculo"])
-    controle.append(["MARIA SOUZA", "0010953-19.2017.5.03.0034", "15/04/2026"])
+    controle.append(["1001", "MARIA SOUZA", None, "14/12/2019", "15/04/2026", "ok"])
 
     historico = Workbook()
     aba = historico.active
@@ -301,4 +300,29 @@ def test_build_preview_accepts_explicit_calculation_date_for_existing_date_fix_m
     )
 
     assert len(preview.valid_records) == 1
+    assert preview.valid_records[0].data_demissao == "14/12/2019"
     assert preview.valid_records[0].data_calculo == "15/04/2026"
+
+
+def test_build_preview_applies_fixed_process_when_row_does_not_have_one() -> None:
+    cadastro = Workbook()
+    controle = cadastro.active
+    controle.title = "Controle"
+    controle.append(["1001", "MARIA SOUZA", None, "15/04/2026", "ok"])
+
+    historico = Workbook()
+    aba = historico.active
+    aba.title = "MARIA SOUZA"
+    aba.append(["Funcionario", "Periodo", "Base"])
+    aba.append(["MARIA SOUZA", "01/2020", "10,00"])
+
+    preview = build_preview(
+        cadastro,
+        history_workbook=historico,
+        limit=None,
+        execution_mode=ExecutionMode.CORRIGIR_HISTORICO,
+        fixed_process="0010953-19.2017.5.03.0034",
+    )
+
+    assert len(preview.valid_records) == 1
+    assert preview.valid_records[0].processo == "0010953-19.2017.5.03.0034"

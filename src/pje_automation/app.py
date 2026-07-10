@@ -46,6 +46,7 @@ class Application:
         output_dir: Path,
         history_file: Path | None = None,
         execution_mode: ExecutionMode = ExecutionMode.NOVO_CALCULO,
+        fixed_process: str | None = None,
     ) -> WorkbookPreview:
         paths = validate_app_paths(
             model_file,
@@ -63,6 +64,7 @@ class Application:
                 history_workbook=history_workbook,
                 limit=None,
                 execution_mode=execution_mode,
+                fixed_process=fixed_process,
             )
             preview.valid_records = self._select_records_for_execution(
                 preview,
@@ -88,6 +90,7 @@ class Application:
         output_dir: Path,
         history_file: Path | None = None,
         execution_mode: ExecutionMode = ExecutionMode.NOVO_CALCULO,
+        fixed_process: str | None = None,
     ) -> str:
         self.clear_stop_request()
         paths = validate_app_paths(
@@ -110,6 +113,7 @@ class Application:
                     history_workbook=history_workbook,
                     limit=None,
                     execution_mode=execution_mode,
+                    fixed_process=fixed_process,
                 )
                 records = self._select_records_for_execution(
                     preview,

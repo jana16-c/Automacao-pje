@@ -113,6 +113,19 @@ def test_regeneration_confirm_timeout_seconds_reads_execution_config() -> None:
     assert workflow._regeneration_confirm_timeout_seconds() == 8
 
 
+def test_liquidation_timeouts_read_execution_config() -> None:
+    workflow = build_workflow()
+    workflow.browser_manager.config["execution"] = {
+        "liquidation_timeout_seconds": 360,
+        "liquidation_menu_settle_seconds": 1.5,
+        "liquidation_execute_settle_seconds": 2.5,
+    }
+
+    assert workflow._liquidation_timeout_seconds() == 360
+    assert workflow._liquidation_menu_settle_seconds() == 1.5
+    assert workflow._liquidation_execute_settle_seconds() == 2.5
+
+
 def test_resume_phase_index_maps_export_resume_to_last_phase() -> None:
     workflow = build_workflow()
 
@@ -202,6 +215,28 @@ def test_select_verbas_script_excludes_child_installments() -> None:
             return 1
 
     assert workflow._select_verbas_for_regeneration(DriverStub()) == 1
+
+
+def test_run_liquidation_applies_settle_pauses_and_dedicated_timeout() -> None:
+    workflow = build_workflow()
+    calls = []
+
+    workflow._click_required = lambda driver, key, url_fragment=None: calls.append(("click", key, url_fragment))
+    workflow._timed_pause = lambda seconds, context: calls.append(("pause", seconds, context))
+    workflow._wait_for_success_feedback = lambda driver, timeout: calls.append(("success", timeout))
+    workflow._liquidation_menu_settle_seconds = lambda: 1.0
+    workflow._liquidation_execute_settle_seconds = lambda: 2.0
+    workflow._liquidation_timeout_seconds = lambda: 300
+
+    workflow._run_liquidation(object())
+
+    assert calls == [
+        ("click", "menu.liquidar", "liquidacao.jsf"),
+        ("pause", 1.0, "LIQUIDACAO_MENU"),
+        ("click", "liquidar.executar", None),
+        ("pause", 2.0, "LIQUIDACAO_EXECUTAR"),
+        ("success", 300),
+    ]
 
 
 def test_click_if_present_uses_requested_short_timeout() -> None:

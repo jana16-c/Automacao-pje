@@ -88,6 +88,7 @@ def build_preview(
     history_workbook: Workbook | None = None,
     limit: int | None = 20,
     execution_mode: ExecutionMode = ExecutionMode.NOVO_CALCULO,
+    fixed_process: str | None = None,
 ) -> WorkbookPreview:
     valid_records: list[Record] = []
     invalid_rows: list[str] = []
@@ -96,6 +97,7 @@ def build_preview(
         workbook,
         limit=limit,
         execution_mode=execution_mode,
+        fixed_process=fixed_process,
     )
     invalid_rows.extend(control_invalid_rows)
 
@@ -152,6 +154,7 @@ def collect_control_records(
     workbook: Workbook,
     limit: int | None = 20,
     execution_mode: ExecutionMode = ExecutionMode.NOVO_CALCULO,
+    fixed_process: str | None = None,
 ) -> tuple[list[PendingRecord], list[str], set[str]]:
     pending_records: list[PendingRecord] = []
     invalid_rows: list[str] = []
@@ -173,7 +176,7 @@ def collect_control_records(
 
             cpf = normalize_cpf(cell_value(row, mapping.columns.get("cpf")))
             matricula = normalize_registration(cell_value(row, mapping.columns.get("matricula")))
-            processo = to_optional_str(cell_value(row, mapping.columns.get("processo")))
+            processo = to_optional_str(cell_value(row, mapping.columns.get("processo"))) or to_optional_str(fixed_process)
             data_demissao = normalize_date(cell_value(row, mapping.columns.get("data_demissao")))
             data_calculo = normalize_date(cell_value(row, mapping.columns.get("data_calculo")))
             if not is_control_row_valid(
@@ -190,6 +193,7 @@ def collect_control_records(
                 execution_mode,
                 cpf=cpf,
                 nome=nome,
+                matricula=matricula,
                 processo=processo,
                 worksheet_title=worksheet.title,
                 row_index=row_index,
@@ -221,40 +225,42 @@ def detect_control_mapping(worksheet, execution_mode: ExecutionMode = ExecutionM
     )
     if mapping:
         return mapping
-    if execution_mode == ExecutionMode.NOVO_CALCULO:
-        return infer_headerless_control_mapping(worksheet)
-    return None
+    return infer_headerless_control_mapping(worksheet, execution_mode)
 
 
-def infer_headerless_control_mapping(worksheet) -> SheetMapping | None:
+def infer_headerless_control_mapping(worksheet, execution_mode: ExecutionMode) -> SheetMapping | None:
     for row in worksheet.iter_rows(min_row=1, max_row=5, values_only=True):
         if not row:
             continue
         matricula = normalize_registration(cell_value(row, 0))
         nome = to_optional_str(cell_value(row, 1))
-        cpf = normalize_cpf(cell_value(row, 2))
-        demissao_index = None
-        admissao_index = None
-        fourth_date = normalize_date(cell_value(row, 3)) if looks_like_control_date(cell_value(row, 3)) else None
-        fifth_date = normalize_date(cell_value(row, 4)) if looks_like_control_date(cell_value(row, 4)) else None
-        if fourth_date and fifth_date:
-            admissao_index = 3
-            demissao_index = 4
-        elif fifth_date:
-            admissao_index = 3 if cell_value(row, 3) is not None else None
-            demissao_index = 4
-        elif fourth_date:
-            demissao_index = 3
-        if matricula and nome and cpf and demissao_index is not None:
-            columns = {
-                "matricula": 0,
-                "nome": 1,
-                "cpf": 2,
-                "data_demissao": demissao_index,
-            }
-            if admissao_index is not None:
-                columns["data_admissao"] = admissao_index
+        if not matricula or not nome:
+            continue
+
+        columns = {"matricula": 0, "nome": 1}
+        if cpf_column := headerless_cpf_column(row):
+            columns["cpf"] = cpf_column
+        if process_column := headerless_process_column(row):
+            columns["processo"] = process_column
+
+        date_columns = headerless_date_columns(row, skip_columns=set(columns.values()))
+        if execution_mode == ExecutionMode.NOVO_CALCULO:
+            if "cpf" not in columns:
+                continue
+            if len(date_columns) >= 2:
+                columns["data_admissao"] = date_columns[0]
+                columns["data_demissao"] = date_columns[1]
+            elif len(date_columns) == 1:
+                columns["data_demissao"] = date_columns[0]
+            if "data_demissao" not in columns:
+                continue
             return SheetMapping(header_row=0, columns=columns)
+
+        if date_columns:
+            columns["data_demissao"] = date_columns[0]
+        if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO and len(date_columns) >= 2:
+            columns["data_calculo"] = date_columns[1]
+        return SheetMapping(header_row=0, columns=columns)
     return None
 
 
@@ -274,8 +280,6 @@ def is_control_row_valid(
 ) -> bool:
     if execution_mode == ExecutionMode.NOVO_CALCULO:
         return bool(cpf and data_demissao)
-    if not processo:
-        return False
     if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO:
         return bool(data_demissao or data_calculo)
     return True
@@ -286,6 +290,7 @@ def build_record_id(
     *,
     cpf: str,
     nome: str,
+    matricula: str | None,
     processo: str | None,
     worksheet_title: str,
     row_index: int,
@@ -295,15 +300,54 @@ def build_record_id(
     process_digits = normalize_process_digits(processo)
     if process_digits:
         return f"{process_digits}-{normalize_name_key(nome)}"
+    if matricula:
+        return f"{matricula}-{normalize_name_key(nome)}"
     return f"{worksheet_title}-{row_index}"
 
 
 def empty_preview_message(execution_mode: ExecutionMode) -> str:
     if execution_mode == ExecutionMode.CORRIGIR_HISTORICO:
-        return "Nenhuma linha elegivel foi encontrada com nome e processo para corrigir o historico."
+        return "Nenhuma linha elegivel foi encontrada com nome ou matricula para corrigir o historico."
     if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO:
-        return "Nenhuma linha elegivel foi encontrada com nome, processo e ao menos uma data para corrigir."
+        return "Nenhuma linha elegivel foi encontrada com nome ou matricula e ao menos uma data para corrigir."
     return "Nenhuma linha elegivel foi encontrada com nome, CPF e data de demissao."
+
+
+def headerless_cpf_column(row: tuple[object, ...]) -> int | None:
+    for index in range(2, min(len(row), 6)):
+        value = cell_value(row, index)
+        if looks_like_headerless_cpf(value):
+            return index
+    return None
+
+
+def headerless_process_column(row: tuple[object, ...]) -> int | None:
+    for index in range(2, min(len(row), 6)):
+        if len(normalize_process_digits(cell_value(row, index))) >= 16:
+            return index
+    return None
+
+
+def headerless_date_columns(row: tuple[object, ...], skip_columns: set[int]) -> list[int]:
+    columns: list[int] = []
+    for index in range(2, min(len(row), 7)):
+        if index in skip_columns:
+            continue
+        if looks_like_control_date(cell_value(row, index)):
+            columns.append(index)
+    return columns
+
+
+def looks_like_headerless_cpf(value: object) -> bool:
+    if value in (None, ""):
+        return False
+    if looks_like_control_date(value):
+        return False
+    text = str(value).strip()
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) != 11:
+        return False
+    return any(marker in text for marker in (".", "-", "/")) or text.isdigit()
 
 
 def build_history_lookup_targets(records: list[PendingRecord]) -> HistoryLookupTargets:
