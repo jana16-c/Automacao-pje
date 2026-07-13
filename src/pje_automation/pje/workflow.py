@@ -45,6 +45,11 @@ class Workflow:
         self.register_driver = register_driver
         self.logger = logger
         self.heartbeat = heartbeat
+        self._session_driver = None
+        self._session_tempdir = None
+
+    def close(self) -> None:
+        self._close_browser_session()
 
     def run_single_record(
         self,
@@ -59,98 +64,164 @@ class Workflow:
     ) -> None:
         self._ensure_not_cancelled()
         self._mark_progress(record, JobState.VALIDANDO_DADOS)
-        with TemporaryDirectory(prefix=f"pje_run_{record.record_id}_") as temp_download_dir:
-            temp_dir = Path(temp_download_dir)
-            staged_model = self._stage_model_for_browser(model_path, temp_dir) if model_path is not None else None
-            driver = self.browser_manager.open_driver(download_dir=temp_dir)
-            if self.register_driver is not None:
-                self.register_driver(driver)
+        lease = self._acquire_driver(record.record_id)
+        driver = lease["driver"]
+        temp_dir = lease["download_dir"]
+        staged_model = self._stage_model_for_browser(model_path, temp_dir) if model_path is not None else None
+        had_error = False
+        try:
+            self._ensure_not_cancelled()
+            self.browser_manager.open_base_page(driver)
+            resume_phase = self._resume_phase_index(resume_state)
+            can_resume_recent = resume_recent and self._can_resume_recent(resume_state)
+            if can_resume_recent and self.logger is not None and resume_state is not None:
+                self.logger.info("Retomando registro %s a partir de %s.", record.record_id, resume_state.value)
+            if execution_mode == ExecutionMode.NOVO_CALCULO:
+                self._start_or_resume_calculation(driver, staged_model, record, resume_recent=can_resume_recent)
+                self._ensure_not_cancelled()
+                if resume_phase <= 0:
+                    self._fill_identity(driver, record)
+                self._ensure_not_cancelled()
+                if resume_phase <= 1:
+                    self._refresh_verbas(driver, record)
+                self._ensure_not_cancelled()
+                if resume_phase <= 2:
+                    self._refresh_fgts(driver, record)
+                self._ensure_not_cancelled()
+                if resume_phase <= 3:
+                    self._refresh_contribuicao_social(driver, record)
+                self._ensure_not_cancelled()
+                if resume_phase <= 4:
+                    self._process_historico(driver, record)
+            else:
+                self._open_existing_calculation_from_search(driver, record)
+                self._ensure_not_cancelled()
+                if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO and resume_phase <= 0:
+                    self._update_calculation_dates(driver, record)
+                self._ensure_not_cancelled()
+                if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO and resume_phase <= 1:
+                    self._refresh_verbas(driver, record)
+                self._ensure_not_cancelled()
+                if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO and resume_phase <= 2:
+                    self._refresh_fgts(driver, record)
+                self._ensure_not_cancelled()
+                if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO and resume_phase <= 3:
+                    self._refresh_contribuicao_social(driver, record)
+                self._ensure_not_cancelled()
+                if resume_phase <= 4:
+                    self._process_historico(driver, record)
+            self._ensure_not_cancelled()
+            if resume_phase <= 5:
+                self._liquidate_and_export(driver, record, pdf_dir, pjc_dir)
+            self._mark_progress(record, JobState.CONCLUIDO)
+        except Exception as exc:
+            had_error = True
+            prefix = sanitize_filename(record.record_id)
+            screenshot_path = None
+            html_path = None
             try:
-                self._ensure_not_cancelled()
-                self.browser_manager.open_base_page(driver)
-                resume_phase = self._resume_phase_index(resume_state)
-                can_resume_recent = resume_recent and self._can_resume_recent(resume_state)
-                if can_resume_recent and self.logger is not None and resume_state is not None:
-                    self.logger.info("Retomando registro %s a partir de %s.", record.record_id, resume_state.value)
-                if execution_mode == ExecutionMode.NOVO_CALCULO:
-                    self._start_or_resume_calculation(driver, staged_model, record, resume_recent=can_resume_recent)
-                    self._ensure_not_cancelled()
-                    if resume_phase <= 0:
-                        self._fill_identity(driver, record)
-                    self._ensure_not_cancelled()
-                    if resume_phase <= 1:
-                        self._refresh_verbas(driver, record)
-                    self._ensure_not_cancelled()
-                    if resume_phase <= 2:
-                        self._refresh_fgts(driver, record)
-                    self._ensure_not_cancelled()
-                    if resume_phase <= 3:
-                        self._refresh_contribuicao_social(driver, record)
-                    self._ensure_not_cancelled()
-                    if resume_phase <= 4:
-                        self._process_historico(driver, record)
-                else:
-                    self._open_existing_calculation_from_search(driver, record)
-                    self._ensure_not_cancelled()
-                    if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO and resume_phase <= 0:
-                        self._update_calculation_dates(driver, record)
-                    self._ensure_not_cancelled()
-                    if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO and resume_phase <= 1:
-                        self._refresh_verbas(driver, record)
-                    self._ensure_not_cancelled()
-                    if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO and resume_phase <= 2:
-                        self._refresh_fgts(driver, record)
-                    self._ensure_not_cancelled()
-                    if execution_mode == ExecutionMode.CORRIGIR_DATAS_E_HISTORICO and resume_phase <= 3:
-                        self._refresh_contribuicao_social(driver, record)
-                    self._ensure_not_cancelled()
-                    if resume_phase <= 4:
-                        self._process_historico(driver, record)
-                self._ensure_not_cancelled()
-                if resume_phase <= 5:
-                    self._liquidate_and_export(driver, record, pdf_dir, pjc_dir)
-                self._mark_progress(record, JobState.CONCLUIDO)
-            except Exception as exc:
-                prefix = sanitize_filename(record.record_id)
-                screenshot_path = None
-                html_path = None
-                try:
-                    screenshot_path, html_path = save_evidence(driver, evidence_dir / prefix, "erro_fluxo")
-                except Exception:
-                    pass
-                error_code = exc.code if isinstance(exc, AutomationError) else type(exc).__name__
-                current_job = self.repository.get_job(record.record_id)
-                current_resume_state = current_job.resume_state if current_job is not None else resume_state
-                error_details = self._build_error_details(
-                    driver,
-                    resume_state=current_resume_state,
-                    screenshot_path=screenshot_path,
-                    html_path=html_path,
+                screenshot_path, html_path = save_evidence(driver, evidence_dir / prefix, "erro_fluxo")
+            except Exception:
+                pass
+            error_code = exc.code if isinstance(exc, AutomationError) else type(exc).__name__
+            current_job = self.repository.get_job(record.record_id)
+            current_resume_state = current_job.resume_state if current_job is not None else resume_state
+            error_details = self._build_error_details(
+                driver,
+                resume_state=current_resume_state,
+                screenshot_path=screenshot_path,
+                html_path=html_path,
+            )
+            if self.logger is not None:
+                self.logger.error(
+                    "Falha no fluxo do registro %s | codigo=%s | resume=%s | screenshot=%s | html=%s",
+                    record.record_id,
+                    error_code,
+                    current_resume_state.value if current_resume_state is not None else "",
+                    screenshot_path,
+                    html_path,
                 )
-                if self.logger is not None:
-                    self.logger.error(
-                        "Falha no fluxo do registro %s | codigo=%s | resume=%s | screenshot=%s | html=%s",
-                        record.record_id,
-                        error_code,
-                        current_resume_state.value if current_resume_state is not None else "",
-                        screenshot_path,
-                        html_path,
-                    )
-                self.repository.mark_error(
-                    record,
-                    resume_state=current_resume_state,
-                    error_code=error_code,
-                    error_message=str(exc),
-                    error_details=error_details,
-                )
-                raise
-            finally:
-                if self.register_driver is not None:
-                    self.register_driver(None)
-                try:
-                    driver.quit()
-                except Exception:
-                    pass
+            self.repository.mark_error(
+                record,
+                resume_state=current_resume_state,
+                error_code=error_code,
+                error_message=str(exc),
+                error_details=error_details,
+            )
+            raise
+        finally:
+            self._release_driver(lease, had_error=had_error)
+
+    def _acquire_driver(self, record_id: str) -> dict[str, object]:
+        if self._reuse_browser_session_enabled():
+            if self._session_driver is not None and not self._driver_is_alive(self._session_driver):
+                self._close_browser_session()
+            if self._session_driver is None:
+                self._session_tempdir = TemporaryDirectory(prefix="pje_session_")
+                download_dir = Path(self._session_tempdir.name)
+                self._session_driver = self.browser_manager.open_driver(download_dir=download_dir)
+            if self.register_driver is not None:
+                self.register_driver(self._session_driver)
+            return {
+                "driver": self._session_driver,
+                "download_dir": Path(self._session_tempdir.name),
+                "reuse": True,
+            }
+
+        tempdir = TemporaryDirectory(prefix=f"pje_run_{record_id}_")
+        download_dir = Path(tempdir.name)
+        driver = self.browser_manager.open_driver(download_dir=download_dir)
+        if self.register_driver is not None:
+            self.register_driver(driver)
+        return {
+            "driver": driver,
+            "download_dir": download_dir,
+            "tempdir": tempdir,
+            "reuse": False,
+        }
+
+    def _release_driver(self, lease: dict[str, object], *, had_error: bool) -> None:
+        if lease.get("reuse"):
+            if had_error:
+                self._close_browser_session()
+            return
+
+        driver = lease.get("driver")
+        tempdir = lease.get("tempdir")
+        if self.register_driver is not None:
+            self.register_driver(None)
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        if tempdir is not None:
+            tempdir.cleanup()
+
+    def _close_browser_session(self) -> None:
+        driver = self._session_driver
+        self._session_driver = None
+        if self.register_driver is not None:
+            self.register_driver(None)
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        tempdir = self._session_tempdir
+        self._session_tempdir = None
+        if tempdir is not None:
+            tempdir.cleanup()
+
+    def _reuse_browser_session_enabled(self) -> bool:
+        return bool(self.browser_manager.config.get("execution", {}).get("reuse_browser_session", True))
+
+    def _driver_is_alive(self, driver) -> bool:
+        try:
+            _ = driver.title
+            return True
+        except Exception:
+            return False
 
     def _mark_progress(self, record: Record, state: JobState) -> None:
         self._beat(state.value)

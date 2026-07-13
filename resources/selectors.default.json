@@ -138,6 +138,10 @@
       {
         "by": "id",
         "value": "formulario:j_id38:0:j_id41:10:j_id46"
+      },
+      {
+        "by": "xpath",
+        "value": "//li[@id='li_calculo_verbas']//a[contains(normalize-space(.), 'Verbas')]"
       }
     ],
     "verbas.regerar": [
@@ -170,6 +174,10 @@
       {
         "by": "id",
         "value": "formulario:j_id38:0:j_id41:14:j_id46"
+      },
+      {
+        "by": "xpath",
+        "value": "//li[@id='li_calculo_fgts']//a[contains(normalize-space(.), 'FGTS')]"
       }
     ],
     "fgts.ocorrencias": [
@@ -200,6 +208,10 @@
       {
         "by": "id",
         "value": "formulario:j_id38:0:j_id41:15:j_id46"
+      },
+      {
+        "by": "xpath",
+        "value": "//li[@id='li_calculo_inss']//a[contains(normalize-space(.), 'Contribuição Social')]"
       }
     ],
     "contribuicao.ocorrencias": [
@@ -230,6 +242,10 @@
       {
         "by": "id",
         "value": "formulario:j_id38:0:j_id41:9:j_id46"
+      },
+      {
+        "by": "xpath",
+        "value": "//li[@id='li_calculo_historico_salarial']//a[contains(normalize-space(.), 'Histórico Salarial')]"
       }
     ],
     "historico.editar": [

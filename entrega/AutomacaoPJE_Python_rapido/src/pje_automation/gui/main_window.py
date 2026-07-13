@@ -205,10 +205,6 @@ class MainWindow(tk.Tk):
     def _show_preview(self, preview: WorkbookPreview) -> None:
         self.preview_box.delete("1.0", tk.END)
         self.preview_box.insert(tk.END, f"Registros validos: {len(preview.valid_records)}\n")
-        if preview.ignored_control_sheets:
-            self.preview_box.insert(tk.END, f"Abas ignoradas no cadastro: {', '.join(preview.ignored_control_sheets)}\n")
-        if preview.ignored_history_sheets:
-            self.preview_box.insert(tk.END, f"Abas ignoradas no historico: {', '.join(preview.ignored_history_sheets)}\n")
         self.preview_box.insert(tk.END, "\nNomes validados para automacao:\n")
         for record in preview.valid_records:
             self.preview_box.insert(tk.END, f"{record.nome}\n")

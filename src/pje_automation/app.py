@@ -128,6 +128,7 @@ class Application:
                 raise ValueError("Nenhum registro valido foi encontrado na planilha.")
 
             connection = connect_database(layout.database_path)
+            workflow = None
             try:
                 repository = JobRepository(connection)
                 workflow = Workflow(
@@ -195,6 +196,11 @@ class Application:
                     return f"Registro {processed_records[0].record_id} processado."
                 return f"{len(processed_records)} registros processados."
             finally:
+                try:
+                    if workflow is not None:
+                        workflow.close()
+                except Exception:
+                    pass
                 connection.close()
         finally:
             self.set_active_driver(None)

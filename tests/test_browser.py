@@ -38,9 +38,70 @@ def test_apply_runtime_window_state_minimizes_when_enabled() -> None:
     called = []
 
     class DriverStub:
+        def execute_cdp_cmd(self, command, params):
+            raise RuntimeError("cdp indisponivel")
+
         def minimize_window(self):
             called.append(True)
 
     manager._apply_runtime_window_state(DriverStub())
 
     assert called == [True]
+
+
+def test_apply_runtime_window_state_prefers_chrome_cdp_minimize() -> None:
+    manager = BrowserManager()
+    calls: list[tuple[str, dict]] = []
+
+    class DriverStub:
+        def execute_cdp_cmd(self, command, params):
+            calls.append((command, params))
+            if command == "Browser.getWindowForTarget":
+                return {"windowId": 7}
+            return {}
+
+        def minimize_window(self):
+            raise AssertionError("nao deveria usar fallback quando o CDP funciona")
+
+    manager._apply_runtime_window_state(DriverStub())
+
+    assert calls == [
+        ("Browser.getWindowForTarget", {}),
+        ("Browser.setWindowBounds", {"windowId": 7, "bounds": {"windowState": "minimized"}}),
+    ]
+
+
+def test_apply_startup_window_state_adds_start_minimized_for_chrome() -> None:
+    manager = BrowserManager()
+
+    class OptionsStub:
+        def __init__(self):
+            self.arguments = []
+
+        def add_argument(self, argument):
+            self.arguments.append(argument)
+
+    options = OptionsStub()
+
+    manager._apply_startup_window_state("chrome", options)
+
+    assert "--start-minimized" in options.arguments
+    assert "--window-size=1280,900" in options.arguments
+
+
+def test_apply_startup_window_state_skips_when_minimization_disabled() -> None:
+    manager = BrowserManager()
+    manager.config["execution"]["minimize_browser_window"] = False
+
+    class OptionsStub:
+        def __init__(self):
+            self.arguments = []
+
+        def add_argument(self, argument):
+            self.arguments.append(argument)
+
+    options = OptionsStub()
+
+    manager._apply_startup_window_state("chrome", options)
+
+    assert options.arguments == []

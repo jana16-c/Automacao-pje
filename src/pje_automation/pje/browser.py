@@ -71,6 +71,7 @@ class BrowserManager:
         options = FirefoxOptions()
         if self.config["browser"].get("headless"):
             options.add_argument("-headless")
+        self._apply_startup_window_state("firefox", options)
 
         binary = self.config["browser"].get("firefox_binary")
         if binary:
@@ -99,6 +100,7 @@ class BrowserManager:
         options.page_load_strategy = "eager"
         if self.config["browser"].get("headless"):
             options.add_argument("--headless=new")
+        self._apply_startup_window_state("chrome", options)
         options.add_argument("--disable-gpu")
         options.add_argument("--no-first-run")
         options.add_argument("--no-default-browser-check")
@@ -158,12 +160,43 @@ class BrowserManager:
         return bool(driver.find_elements(By.XPATH, f"//*[contains(normalize-space(.), {json.dumps(text)})]"))
 
     def _apply_runtime_window_state(self, driver: WebDriver) -> None:
-        if not self.config.get("execution", {}).get("minimize_browser_window", True):
+        if not self._should_minimize_browser_window():
+            return
+        if self._try_minimize_chrome_window(driver):
             return
         try:
             driver.minimize_window()
         except Exception:
             return
+
+    def _apply_startup_window_state(self, browser_name: str, options) -> None:
+        if not self._should_minimize_browser_window():
+            return
+        if browser_name == "chrome":
+            options.add_argument("--start-minimized")
+            options.add_argument("--window-size=1280,900")
+
+    def _should_minimize_browser_window(self) -> bool:
+        return bool(self.config.get("execution", {}).get("minimize_browser_window", True))
+
+    def _try_minimize_chrome_window(self, driver: WebDriver) -> bool:
+        if not hasattr(driver, "execute_cdp_cmd"):
+            return False
+        try:
+            window_info = driver.execute_cdp_cmd("Browser.getWindowForTarget", {})
+            window_id = window_info.get("windowId")
+            if window_id is None:
+                return False
+            driver.execute_cdp_cmd(
+                "Browser.setWindowBounds",
+                {
+                    "windowId": window_id,
+                    "bounds": {"windowState": "minimized"},
+                },
+            )
+            return True
+        except Exception:
+            return False
 
 
 def load_config(path: Path) -> dict[str, Any]:

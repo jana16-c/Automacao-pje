@@ -29,11 +29,12 @@
     "continue_on_record_error": true,
     "resume_previous_run": true,
     "overwrite_valid_outputs": false,
+    "reuse_browser_session": false,
     "cooldown_every_records": 5,
     "cooldown_seconds": 120,
     "failed_record_revisit_rounds": 1,
-    "record_watchdog_timeout_seconds": 240,
-    "watchdog_poll_seconds": 5,
+    "record_watchdog_timeout_seconds": 120,
+    "watchdog_poll_seconds": 3,
     "minimize_browser_window": true
   },
   "output": {
