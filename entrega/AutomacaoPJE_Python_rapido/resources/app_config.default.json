@@ -32,7 +32,9 @@
     "cooldown_every_records": 5,
     "cooldown_seconds": 120,
     "failed_record_revisit_rounds": 1,
-    "reuse_browser_session": false,
+    "reuse_browser_session": true,
+    "cooldown_every_records_correction": 0,
+    "cooldown_seconds_correction": 0,
     "record_watchdog_timeout_seconds": 120,
     "watchdog_poll_seconds": 3,
     "minimize_browser_window": true

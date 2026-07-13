@@ -5,6 +5,7 @@ from threading import Event, Thread
 from datetime import datetime
 from time import monotonic, sleep
 from traceback import format_exception
+from typing import Callable
 
 from openpyxl import Workbook
 from selenium.common.exceptions import TimeoutException, WebDriverException
@@ -91,6 +92,7 @@ class Application:
         history_file: Path | None = None,
         execution_mode: ExecutionMode = ExecutionMode.NOVO_CALCULO,
         fixed_process: str | None = None,
+        progress_callback: Callable[[str, int, int, float | None], None] | None = None,
     ) -> str:
         self.clear_stop_request()
         paths = validate_app_paths(
@@ -153,6 +155,7 @@ class Application:
                     "logger": logger,
                     "continue_on_error": continue_on_error,
                     "execution_mode": execution_mode,
+                    "progress_callback": progress_callback,
                 }
 
                 batch_processed, failed_records = self._execute_record_batch(
@@ -401,11 +404,17 @@ class Application:
     def _watchdog_poll_seconds(self) -> float:
         return max(1.0, float(self.browser_manager.config["execution"].get("watchdog_poll_seconds", 5)))
 
-    def _cooldown_every_records(self) -> int:
-        return max(0, int(self.browser_manager.config["execution"].get("cooldown_every_records", 5)))
-
-    def _cooldown_seconds(self) -> int:
-        return max(0, int(self.browser_manager.config["execution"].get("cooldown_seconds", 120)))
+    def _cooldown_profile(self, execution_mode: ExecutionMode) -> tuple[int, int]:
+        execution_config = self.browser_manager.config["execution"]
+        if execution_mode != ExecutionMode.NOVO_CALCULO:
+            return (
+                max(0, int(execution_config.get("cooldown_every_records_correction", 0))),
+                max(0, int(execution_config.get("cooldown_seconds_correction", 0))),
+            )
+        return (
+            max(0, int(execution_config.get("cooldown_every_records", 5))),
+            max(0, int(execution_config.get("cooldown_seconds", 120))),
+        )
 
     def _resume_previous_run_enabled(self) -> bool:
         return bool(self.browser_manager.config["execution"].get("resume_previous_run", True))
@@ -514,9 +523,8 @@ class Application:
             return exc.code in {"PJE_SERVER_ERROR", "PJE_UNAVAILABLE"}
         return isinstance(exc, (TimeoutException, WebDriverException))
 
-    def _maybe_pause_after_batch(self, handled_records: int, logger) -> None:
-        cooldown_every = self._cooldown_every_records()
-        cooldown_seconds = self._cooldown_seconds()
+    def _maybe_pause_after_batch(self, handled_records: int, logger, execution_mode: ExecutionMode) -> None:
+        cooldown_every, cooldown_seconds = self._cooldown_profile(execution_mode)
         if cooldown_every <= 0 or cooldown_seconds <= 0:
             return
         if handled_records % cooldown_every != 0:
@@ -605,9 +613,14 @@ class Application:
         logger,
         continue_on_error: bool,
         batch_label: str,
+        progress_callback: Callable[[str, int, int, float | None], None] | None,
     ) -> tuple[list[Record], list[tuple[Record, Exception, JobRecord | None, Path | None]]]:
         processed_records: list[Record] = []
         failed_records: list[tuple[Record, Exception, JobRecord | None, Path | None]] = []
+        total_records = len(execution_plan)
+        handled_records = 0
+        batch_started_at = monotonic()
+        self._notify_progress(progress_callback, batch_label, handled_records, total_records, eta_seconds=None)
         for index, (record, resume_state) in enumerate(execution_plan, start=1):
             self._ensure_not_cancelled()
             try:
@@ -642,12 +655,45 @@ class Application:
                     detail_log,
                 )
                 if index < len(execution_plan):
-                    self._maybe_pause_after_batch(index, logger)
+                    self._maybe_pause_after_batch(index, logger, execution_mode)
+                handled_records += 1
+                self._notify_progress(
+                    progress_callback,
+                    batch_label,
+                    handled_records,
+                    total_records,
+                    eta_seconds=self._estimate_remaining_seconds(handled_records, total_records, monotonic() - batch_started_at),
+                )
                 continue
             processed_records.append(record)
+            handled_records += 1
+            self._notify_progress(
+                progress_callback,
+                batch_label,
+                handled_records,
+                total_records,
+                eta_seconds=self._estimate_remaining_seconds(handled_records, total_records, monotonic() - batch_started_at),
+            )
             if index < len(execution_plan):
-                self._maybe_pause_after_batch(index, logger)
+                self._maybe_pause_after_batch(index, logger, execution_mode)
         return processed_records, failed_records
+
+    def _notify_progress(
+        self,
+        progress_callback: Callable[[str, int, int, float | None], None] | None,
+        batch_label: str,
+        current: int,
+        total: int,
+        eta_seconds: float | None,
+    ) -> None:
+        if callable(progress_callback):
+            progress_callback(batch_label, current, total, eta_seconds)
+
+    def _estimate_remaining_seconds(self, handled_records: int, total_records: int, elapsed_seconds: float) -> float | None:
+        if handled_records <= 0 or total_records <= handled_records:
+            return None
+        average_seconds = elapsed_seconds / handled_records
+        return max(0.0, average_seconds * (total_records - handled_records))
 
     def _start_attempt_watchdog(self, record: Record, attempt: int, logger):
         state = {

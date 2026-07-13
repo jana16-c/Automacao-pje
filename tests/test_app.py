@@ -5,6 +5,7 @@ from openpyxl import load_workbook
 from selenium.common.exceptions import TimeoutException
 
 from pje_automation.app import Application
+from pje_automation.domain.execution import ExecutionMode
 from pje_automation.domain.errors import AutomationCancelledError, WorkflowExecutionError
 from pje_automation.domain.models import HistoricalSeries, HistoricalValue, JobRecord, Record, RecordSource, WorkbookPreview
 from pje_automation.domain.states import JobState
@@ -173,6 +174,34 @@ def test_failed_record_revisit_rounds_reads_execution_config() -> None:
     app = build_application()
 
     assert app._failed_record_revisit_rounds() == 1
+
+
+def test_cooldown_profile_keeps_default_pause_for_new_calculation() -> None:
+    app = build_application()
+
+    assert app._cooldown_profile(ExecutionMode.NOVO_CALCULO) == (5, 120)
+
+
+def test_cooldown_profile_disables_default_pause_for_correction_modes() -> None:
+    app = build_application()
+
+    assert app._cooldown_profile(ExecutionMode.CORRIGIR_HISTORICO) == (0, 0)
+    assert app._cooldown_profile(ExecutionMode.CORRIGIR_DATAS_E_HISTORICO) == (0, 0)
+
+
+def test_estimate_remaining_seconds_uses_average_of_completed_records() -> None:
+    app = build_application()
+
+    remaining = app._estimate_remaining_seconds(handled_records=5, total_records=30, elapsed_seconds=100)
+
+    assert remaining == 500
+
+
+def test_estimate_remaining_seconds_returns_none_without_completed_records() -> None:
+    app = build_application()
+
+    assert app._estimate_remaining_seconds(handled_records=0, total_records=30, elapsed_seconds=100) is None
+    assert app._estimate_remaining_seconds(handled_records=30, total_records=30, elapsed_seconds=100) is None
 
 
 def test_should_retry_workflow_accepts_timeout_exception() -> None:

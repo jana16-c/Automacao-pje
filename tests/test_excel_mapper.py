@@ -139,6 +139,84 @@ def test_build_preview_matches_companion_history_across_multiple_employee_sheets
     assert bruno_values == ["30.00"]
 
 
+def test_build_preview_matches_companion_history_by_first_three_name_tokens_when_sheet_title_is_truncated() -> None:
+    cadastro = Workbook()
+    controle = cadastro.active
+    controle.title = "Controle"
+    controle.append(["Matricula", "Nome", "CPF", "Demissao"])
+    controle.append(["1001", "JOAO PEDRO ALVES SANTOS", "11111111111", "01/02/2020"])
+
+    historico = Workbook()
+    aba = historico.active
+    aba.title = "JOAO PEDRO ALVES SANTO"
+    aba.append([])
+    aba.append([])
+    aba.append(["Periodo", "Base"])
+    aba.append(["01/2020", "10,00"])
+    aba.append(["02/2020", "20,00"])
+
+    preview = build_preview(cadastro, history_workbook=historico, limit=None)
+
+    record = preview.valid_records[0]
+    valores = [str(item.valor) for item in record.historicos[0].valores]
+
+    assert valores == ["10.00", "20.00"]
+
+
+def test_build_preview_matches_companion_history_ignoring_particles_and_last_token_truncation() -> None:
+    cadastro = Workbook()
+    controle = cadastro.active
+    controle.title = "Controle"
+    controle.append(["Matricula", "Nome", "CPF", "Demissao"])
+    controle.append(["1001", "MARIA DE FATIMA SOUZA", "11111111111", "01/02/2020"])
+
+    historico = Workbook()
+    aba = historico.active
+    aba.title = "MARIA FATIMA SOUZ"
+    aba.append([])
+    aba.append([])
+    aba.append(["Periodo", "Base"])
+    aba.append(["01/2020", "10,00"])
+    aba.append(["02/2020", "20,00"])
+
+    preview = build_preview(cadastro, history_workbook=historico, limit=None)
+
+    record = preview.valid_records[0]
+    valores = [str(item.valor) for item in record.historicos[0].valores]
+
+    assert valores == ["10.00", "20.00"]
+
+
+def test_build_preview_keeps_large_history_workbook_sheet_when_a2_registration_matches() -> None:
+    cadastro = Workbook()
+    controle = cadastro.active
+    controle.title = "Controle"
+    controle.append(["Matricula", "Nome", "CPF", "Demissao"])
+    controle.append(["1001", "MARIA DE FATIMA SOUZA", "11111111111", "01/02/2020"])
+
+    historico = Workbook()
+    aba = historico.active
+    aba.title = "FUNCIONARIO 1001"
+    aba["A1"] = "Matricula"
+    aba["A2"] = "1001"
+    aba.append([])
+    aba.append(["Periodo", "Base"])
+    aba.append(["01/2020", "10,00"])
+    aba.append(["02/2020", "20,00"])
+
+    for index in range(2, 103):
+        filler = historico.create_sheet(f"Planilha {index}")
+        filler.append(["Observacao"])
+        filler.append([f"aba {index}"])
+
+    preview = build_preview(cadastro, history_workbook=historico, limit=None)
+
+    record = preview.valid_records[0]
+    valores = [str(item.valor) for item in record.historicos[0].valores]
+
+    assert valores == ["10.00", "20.00"]
+
+
 def test_build_preview_lists_ignored_history_sheets() -> None:
     cadastro = Workbook()
     controle = cadastro.active

@@ -174,6 +174,7 @@ class BrowserManager:
             return
         if browser_name == "chrome":
             options.add_argument("--start-minimized")
+            options.add_argument("--window-position=-32000,-32000")
             options.add_argument("--window-size=1280,900")
 
     def _should_minimize_browser_window(self) -> bool:

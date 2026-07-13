@@ -38,9 +38,6 @@ def test_apply_runtime_window_state_minimizes_when_enabled() -> None:
     called = []
 
     class DriverStub:
-        def execute_cdp_cmd(self, command, params):
-            raise RuntimeError("cdp indisponivel")
-
         def minimize_window(self):
             called.append(True)
 
@@ -86,6 +83,7 @@ def test_apply_startup_window_state_adds_start_minimized_for_chrome() -> None:
     manager._apply_startup_window_state("chrome", options)
 
     assert "--start-minimized" in options.arguments
+    assert "--window-position=-32000,-32000" in options.arguments
     assert "--window-size=1280,900" in options.arguments
 
 

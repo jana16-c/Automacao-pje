@@ -81,6 +81,7 @@ class PendingRecord:
 class HistoryLookupTargets:
     matriculas: set[str]
     nomes: set[str]
+    nomes_prefixo: set[tuple[str, ...]]
 
 
 def build_preview(
@@ -354,6 +355,7 @@ def build_history_lookup_targets(records: list[PendingRecord]) -> HistoryLookupT
     return HistoryLookupTargets(
         matriculas={record.matricula for record in records if record.matricula},
         nomes={normalize_name_key(record.nome) for record in records if record.nome},
+        nomes_prefixo={normalize_name_prefix_tokens(record.nome) for record in records if record.nome},
     )
 
 
@@ -407,8 +409,6 @@ def collect_structured_history_series(
     invalid_rows: list[str] = []
     used_sheets: set[str] = set()
     for worksheet in workbook.worksheets:
-        if should_skip_history_sheet_by_title(workbook, worksheet.title, targets):
-            continue
         mapping = detect_mapping(
             worksheet.iter_rows(values_only=True),
             aliases=HISTORY_HEADER_ALIASES,
@@ -463,8 +463,6 @@ def collect_companion_history_series(
     invalid_rows: list[str] = []
     used_sheets: set[str] = set()
     for worksheet in workbook.worksheets:
-        if should_skip_history_sheet_by_title(workbook, worksheet.title, targets):
-            continue
         mapping = detect_mapping(
             worksheet.iter_rows(values_only=True),
             aliases=HISTORY_HEADER_ALIASES,
@@ -547,7 +545,7 @@ def resolve_historicos(
     if matricula:
         series_by_name = history_index.by_matricula.get(matricula, {})
     if not series_by_name and nome:
-        series_by_name = history_index.by_nome.get(normalize_name_key(nome), {})
+        series_by_name = resolve_history_series_by_name(history_index.by_nome, nome)
 
     if historico_nome:
         match = series_by_name.get(normalize_name_key(historico_nome))
@@ -589,7 +587,7 @@ def sheet_name_hint(worksheet, mapping: SheetMapping) -> str | None:
 def matches_history_target(targets: HistoryLookupTargets, matricula: str | None, nome: str | None) -> bool:
     if matricula and matricula in targets.matriculas:
         return True
-    if nome and normalize_name_key(nome) in targets.nomes:
+    if nome and history_name_matches_targets(targets, nome):
         return True
     return False
 
@@ -602,7 +600,71 @@ def should_skip_history_sheet_by_title(workbook: Workbook, title: str, targets: 
         return False
     if normalized_title.startswith("PLANILHA") or normalized_title.startswith("HISTORICO") or normalized_title.startswith("RESUMO"):
         return False
-    return normalized_title not in targets.nomes
+    return not history_name_matches_targets(targets, title)
+
+
+def resolve_history_series_by_name(
+    by_nome: dict[str, dict[str, HistoricalSeries]],
+    nome: str,
+) -> dict[str, HistoricalSeries]:
+    normalized_name = normalize_name_key(nome)
+    exact_match = by_nome.get(normalized_name)
+    if exact_match:
+        return exact_match
+
+    prefix_tokens = normalize_name_prefix_tokens(nome)
+    if not prefix_tokens:
+        return {}
+
+    matches = [
+        series_by_name
+        for owner_name, series_by_name in by_nome.items()
+        if name_prefix_tokens_match(normalize_name_prefix_tokens(owner_name), prefix_tokens)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return {}
+
+
+def history_name_matches_targets(targets: HistoryLookupTargets, nome: str) -> bool:
+    normalized_name = normalize_name_key(nome)
+    if normalized_name in targets.nomes:
+        return True
+    prefix_tokens = normalize_name_prefix_tokens(nome)
+    if not prefix_tokens:
+        return False
+    return any(name_prefix_tokens_match(target_tokens, prefix_tokens) for target_tokens in targets.nomes_prefixo)
+
+
+def normalize_name_prefix_tokens(value: str, token_limit: int = 3) -> tuple[str, ...]:
+    tokens = significant_name_tokens(value)
+    if not tokens:
+        tokens = [token for token in normalize_name_key(value).split() if token]
+    return tuple(tokens[:token_limit])
+
+
+def significant_name_tokens(value: str) -> list[str]:
+    ignored_tokens = {"DA", "DE", "DO", "DAS", "DOS", "E"}
+    return [token for token in normalize_name_key(value).split() if token and token not in ignored_tokens]
+
+
+def name_prefix_tokens_match(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
+    if not left or not right:
+        return False
+    limit = min(len(left), len(right))
+    if limit <= 0:
+        return False
+
+    for index in range(limit):
+        left_token = left[index]
+        right_token = right[index]
+        if left_token == right_token:
+            continue
+        if index == limit - 1 and min(len(left_token), len(right_token)) >= 4:
+            if left_token.startswith(right_token) or right_token.startswith(left_token):
+                continue
+        return False
+    return True
 
 
 def looks_like_control_date(value: object) -> bool:

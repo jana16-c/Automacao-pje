@@ -168,6 +168,7 @@ class MainWindow(tk.Tk):
                 Path(self.history_var.get()) if self.history_var.get() else None,
                 execution_mode=self._execution_mode(),
                 fixed_process=self.fixed_process_var.get().strip() or None,
+                progress_callback=self._queue_progress_update,
             )
         except Exception as exc:
             self.after(0, lambda exc=exc: self._finish_mvp_error(exc))
@@ -197,6 +198,42 @@ class MainWindow(tk.Tk):
         self.probe_button.configure(state=state)
         self.run_button.configure(state=state)
         self.stop_button.configure(state="normal" if running else "disabled")
+
+    def _queue_progress_update(self, batch_label: str, current: int, total: int, eta_seconds: float | None) -> None:
+        self.after(
+            0,
+            lambda batch_label=batch_label, current=current, total=total, eta_seconds=eta_seconds: self._update_progress_view(
+                batch_label,
+                current,
+                total,
+                eta_seconds,
+            ),
+        )
+
+    def _update_progress_view(self, batch_label: str, current: int, total: int, eta_seconds: float | None) -> None:
+        if total <= 0:
+            self.progress.set_status("Executando...", "Preparando execucao.")
+            return
+
+        if batch_label == "lote principal":
+            detail = f"Progresso: {current}/{total}"
+        else:
+            detail = f"{batch_label.capitalize()}: {current}/{total}"
+
+        if eta_seconds is not None:
+            detail = f"{detail} | ETA: {self._format_duration(eta_seconds)}"
+
+        self.progress.set_status("Executando...", detail)
+
+    def _format_duration(self, total_seconds: float) -> str:
+        seconds = max(0, int(round(total_seconds)))
+        minutes, seconds = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours}h {minutes:02d}m"
+        if minutes:
+            return f"{minutes}m {seconds:02d}s"
+        return f"{seconds}s"
 
     def _on_close(self) -> None:
         self.app_controller.request_stop()
